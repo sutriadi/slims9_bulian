@@ -11,6 +11,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Build
+      - name: Install php
         run: apt install php
-        run: php -S 0.0.0.0:58000 .
+      
+      - name: Run php Builtin Server
+        run: php -S 0.0.0.0:58800 .
