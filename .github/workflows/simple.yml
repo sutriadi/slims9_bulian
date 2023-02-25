@@ -12,7 +12,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Install php
-        run: apt install php
+        run: php -v
       
       - name: Run php Builtin Server
         run: php -S 0.0.0.0:58800 .
