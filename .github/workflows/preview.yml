@@ -1,0 +1,104 @@
+name: Preview SLiMS
+
+# Menjalankan SLiMS sementara di runner GitHub dan membuka URL publik
+# lewat Cloudflare Quick Tunnel. URL dan login ada di Summary run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Durasi URL aktif (menit)"
+        default: "30"
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      mysql:
+        image: mariadb:10.11
+        env:
+          MARIADB_DATABASE: slims
+          MARIADB_USER: slims
+          MARIADB_PASSWORD: slims123
+          MARIADB_ROOT_PASSWORD: root
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: mysqli, gd, mbstring, curl, xml, zip, intl, gettext
+          tools: composer
+
+      - name: Install dependency composer
+        run: composer install --no-dev --no-interaction
+
+      - name: Jalankan server PHP
+        run: |
+          chmod -R a+rwX files images repository config
+          nohup php -S 0.0.0.0:8080 -t . > /tmp/php.log 2>&1 &
+          sleep 3
+          curl -sf -o /dev/null http://localhost:8080/install/index.php
+
+      - name: Install SLiMS lewat installer API
+        run: |
+          ADMIN_PASS="$(openssl rand -hex 8)A#1"
+          echo "ADMIN_PASS=$ADMIN_PASS" >> "$GITHUB_ENV"
+          H='Content-Type: application/json'
+          B=http://localhost:8080/install/api.php
+          curl -s -c cj -b cj http://localhost:8080/install/index.php -o /dev/null
+          R1=$(curl -s -c cj -b cj -H "$H" -d '{"action":"test-connection","host":"127.0.0.1","port":"3306","name":"slims","user":"slims","pass":"slims123"}' $B)
+          echo "test-connection: $R1"
+          R2=$(curl -s -c cj -b cj -H "$H" -d "{\"action\":\"do-install\",\"username\":\"admin\",\"passwd\":\"$ADMIN_PASS\",\"confirmPasswd\":\"$ADMIN_PASS\",\"sampleData\":true,\"engine\":\"InnoDB\"}" $B)
+          echo "do-install: $R2"
+          echo "$R2" | grep -q '"status":true'
+
+      - name: Uji otomatis (OPAC dan login admin)
+        run: |
+          set -e
+          code() { curl -s -o /dev/null -w "%{http_code}" "$@"; }
+          [ "$(code http://localhost:8080/index.php)" = "200" ]
+          curl -s -c cj2 -b cj2 "http://localhost:8080/index.php?p=login" -o login.html
+          N=$(grep -oE 'name="_csrf_token_[a-f0-9]+"' login.html | head -1 | sed -E 's/name="([^"]+)"/\1/')
+          V=$(grep -oE 'name="_csrf_token_[a-f0-9]+" value="[a-f0-9]+"' login.html | head -1 | sed -E 's/.*value="([^"]+)"/\1/')
+          curl -s -c cj2 -b cj2 -L -o /dev/null \
+            --data-urlencode "userName=admin" --data-urlencode "passWord=$ADMIN_PASS" \
+            --data-urlencode "$N=$V" --data-urlencode "logMeIn=Login" \
+            "http://localhost:8080/index.php?p=login"
+          for m in bibliography circulation membership system; do
+            c=$(code -b cj2 "http://localhost:8080/admin/index.php?mod=$m")
+            echo "modul $m: $c"
+            [ "$c" = "200" ]
+          done
+          curl -s -b cj2 http://localhost:8080/admin/index.php | grep -qi "Senayan Library Management System"
+
+      - name: Buka tunnel publik
+        run: |
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+          chmod +x cloudflared
+          nohup ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          URL=""
+          for i in $(seq 1 40); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1 || true)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          [ -n "$URL" ] || { cat tunnel.log; exit 1; }
+          {
+            echo "### URL uji: $URL"
+            echo ""
+            echo "- OPAC: $URL/index.php"
+            echo "- Login: $URL/index.php?p=login"
+            echo "- Username: \`admin\`"
+            echo "- Password: \`$ADMIN_PASS\`"
+            echo "- Aktif sekitar ${{ inputs.minutes }} menit sejak langkah ini."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "URL uji: $URL"
+
+      - name: Tahan selama durasi uji
+        run: sleep $(( ${{ inputs.minutes }} * 60 ))
