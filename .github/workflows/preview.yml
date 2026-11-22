@@ -1,7 +1,8 @@
 name: Preview SLiMS
 
 # Menjalankan SLiMS sementara di runner GitHub dan membuka URL publik
-# lewat Cloudflare Quick Tunnel. URL dan login ada di Summary run.
+# lewat Cloudflare Quick Tunnel. URL dan login dicetak di log langkah
+# "Buka tunnel publik" (terlihat saat job masih berjalan).
 
 on:
   workflow_dispatch:
@@ -9,6 +10,10 @@ on:
       minutes:
         description: "Durasi URL aktif (menit)"
         default: "30"
+      admin_password:
+        description: "Password admin (kosongkan untuk acak)"
+        required: false
+        default: ""
 
 jobs:
   preview:
@@ -46,8 +51,10 @@ jobs:
           curl -sf -o /dev/null http://localhost:8080/install/index.php
 
       - name: Install SLiMS lewat installer API
+        env:
+          INPUT_PASS: ${{ inputs.admin_password }}
         run: |
-          ADMIN_PASS="$(openssl rand -hex 8)A#1"
+          ADMIN_PASS="${INPUT_PASS:-$(openssl rand -hex 8)A#1}"
           echo "ADMIN_PASS=$ADMIN_PASS" >> "$GITHUB_ENV"
           H='Content-Type: application/json'
           B=http://localhost:8080/install/api.php
@@ -98,7 +105,12 @@ jobs:
             echo "- Password: \`$ADMIN_PASS\`"
             echo "- Aktif sekitar ${{ inputs.minutes }} menit sejak langkah ini."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "URL uji: $URL"
+          echo "=============================================="
+          echo "URL uji   : $URL"
+          echo "Login     : $URL/index.php?p=login"
+          echo "Username  : admin"
+          echo "Password  : $ADMIN_PASS"
+          echo "=============================================="
 
       - name: Tahan selama durasi uji
         run: sleep $(( ${{ inputs.minutes }} * 60 ))
