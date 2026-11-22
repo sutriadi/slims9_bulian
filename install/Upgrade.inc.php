@@ -1,4 +1,5 @@
 <?php
+
 /**
  * @Created by          : Waris Agung Widodo (ido.alit@gmail.com)
  * @Date                : 2020-01-12 08:36
@@ -21,7 +22,7 @@ class Upgrade
    *
    * @var int
    */
-  private $version = 32;
+  private $version = 39;
 
   /**
    * @param SLiMS $slims
@@ -31,43 +32,60 @@ class Upgrade
   {
     $upgrade = new Upgrade();
     $upgrade->slims = $slims;
+
+    // determine how mane upgrade_role is availabe
+    $versions = [];
+    foreach (get_class_methods($upgrade) as $method) {
+      if (preg_match('/upgrade_role_/', $method)) {
+        $versions[] = preg_replace('/[^0-9]/', '', $method);
+      }
+    }
+
+    // get last version
+    sort($versions);
+    $upgrade->version = $versions[array_key_last($versions)];
     return $upgrade;
   }
 
-  function hookBeforeUpgrade() {
-      // store old sql mode
-      $old_sql_mode = $this->slims->storeOldSqlMode();
-      // update sql_mode to modify database
-      $new_sql_mode = str_replace(['NO_ZERO_DATE', 'NO_ZERO_IN_DATE'], '', $old_sql_mode);
-      $this->slims->updateSqlMode($new_sql_mode);
+  function hookBeforeUpgrade()
+  {
+    // store old sql mode
+    $old_sql_mode = $this->slims->storeOldSqlMode();
+    // update sql_mode to modify database
+    $new_sql_mode = str_replace(['NO_ZERO_DATE', 'NO_ZERO_IN_DATE'], '', $old_sql_mode);
+    $this->slims->updateSqlMode($new_sql_mode);
   }
 
-  function hookAfterUpgrade() {
-      // cek if table not exist
-      $tables = require 'tables.php';
-      foreach ($tables as $table) {
-          $mtables = $this->slims->getTables();
-          if (!in_array($table['table'], $mtables)) {
-              // create table
-              $msg = $this->slims->createTable($table);
-              if ($msg) $error[] = $msg;
-          } else {
-              // check column
-              foreach ($table['column'] as $column) {
-                  $mColumn = $this->slims->getColumn($table['table']);
-                  if (!in_array($column['field'], $mColumn)) {
-                      $msg = $this->slims->addColumn($table['table'], $column);
-                      if ($msg) $error[] = $msg;
-                  }
-              }
+  function hookAfterUpgrade($version)
+  {
+    // cek if table not exist
+    $tables = require 'tables.php';
+    foreach ($tables as $table) {
+      $mtables = $this->slims->getTables();
+      if (!in_array($table['table'], $mtables)) {
+        // create table
+        $msg = $this->slims->createTable($table);
+        if ($msg) $error[] = $msg;
+      } else {
+        // check column
+        foreach ($table['column'] as $column) {
+          $mColumn = $this->slims->getColumn($table['table']);
+          if (!in_array($column['field'], $mColumn)) {
+            $msg = $this->slims->addColumn($table['table'], $column);
+            if ($msg) $error[] = $msg;
           }
+        }
       }
+    }
 
-      // make sure use default template
-      $this->slims->updateTheme('default');
+    // make sure use default template
+    $this->slims->updateTheme('default', $version);
 
-      // rollback sql_mode
-      $this->slims->rollbackSqlMode();
+    // update storeage engine
+    $this->slims->updateStorageEngine();
+
+    // rollback sql_mode
+    $this->slims->rollbackSqlMode();
   }
 
   /**
@@ -78,16 +96,23 @@ class Upgrade
    */
   function from($version)
   {
+    if (!isset($_SESSION['upgrade_attempt'])) $_SESSION['upgrade_attempt'] = 1;
+    else $_SESSION['upgrade_attempt']++;
+
     // run before script
     $this->hookBeforeUpgrade();
 
     $raw_err = [];
-    for ($i = ($version + 1); $i <= $this->version; $i++) {
-      $method = 'upgrade_role_' . $i;
+    $roles = range($version, $this->version);
+    sort($roles);
+
+    foreach ($roles as $role) {
+      $method = 'upgrade_role_' . $role;
       if (method_exists($this, $method)) {
         $raw_err[] = $this->$method();
       }
     }
+
     $err = [];
     foreach ($raw_err as $e) {
       if (is_array($e)) {
@@ -98,65 +123,54 @@ class Upgrade
     }
 
     // run after script
-    $this->hookAfterUpgrade();
+    $this->hookAfterUpgrade($version);
     return $err;
+  }
+
+  function getVersion()
+  {
+    return $this->version;
   }
 
   /**
    * Upgrade role to v3.3.0
    */
-  function upgrade_role_1()
-  {
-  }
+  function upgrade_role_1() {}
 
   /**
    * Upgrade role to v3.4.0
    */
-  function upgrade_role_2()
-  {
-  }
+  function upgrade_role_2() {}
 
   /**
    * Upgrade role to v3.5.0
    */
-  function upgrade_role_3()
-  {
-  }
+  function upgrade_role_3() {}
 
   /**
    * Upgrade role to v3.6.0
    */
-  function upgrade_role_4()
-  {
-  }
+  function upgrade_role_4() {}
 
   /**
    * Upgrade role to v3.7.0
    */
-  function upgrade_role_5()
-  {
-  }
+  function upgrade_role_5() {}
 
   /**
    * Upgrade role to v3.8.0
    */
-  function upgrade_role_6()
-  {
-  }
+  function upgrade_role_6() {}
 
   /**
    * Upgrade role to v3.9.0
    */
-  function upgrade_role_7()
-  {
-  }
+  function upgrade_role_7() {}
 
   /**
    * Upgrade role to v3.10.0
    */
-  function upgrade_role_8()
-  {
-  }
+  function upgrade_role_8() {}
 
   /**
    * Upgrade role to v3.11.0
@@ -190,15 +204,13 @@ UPDATE `mst_item_status` SET `skip_stock_take`=1 WHERE `rules` LIKE '%s:1:\"2\";
 
     $sql['alter'][] = "ALTER TABLE `biblio` CHANGE `labels` `labels` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci NULL;";
 
-    return $this->slims->query($sql, ['truncate', 'alter', 'insert']);
+    return $this->slims->query($sql, ['truncate', 'alter', 'insert'], 9);
   }
 
   /**
    * Upgrade role to v3.12.0
    */
-  function upgrade_role_10()
-  {
-  }
+  function upgrade_role_10() {}
 
   /**
    * Upgrade role to v3.13.0
@@ -210,15 +222,13 @@ UPDATE `mst_item_status` SET `skip_stock_take`=1 WHERE `rules` LIKE '%s:1:\"2\";
     $sql['insert'][] = "INSERT INTO `setting` (`setting_id`, `setting_name`, `setting_value`) VALUES (NULL, 'circulation_receipt', 'b:1;'),
 (NULL, 'barcode_encoding', 's:4:\"128B\";');";
 
-    return $this->slims->query($sql, ['insert']);
+    return $this->slims->query($sql, ['insert'], 11);
   }
 
   /**
    * Upgrade role to v3.14.0
    */
-  function upgrade_role_12()
-  {
-  }
+  function upgrade_role_12() {}
 
   /**
    * Upgrade role to v3.15.0
@@ -304,7 +314,7 @@ PRIMARY KEY ( `member_id` )
     $sql['insert'][] = "INSERT INTO `mst_item_status` (`item_status_id`, `item_status_name`, `rules`, `input_date`, `last_update`, `no_loan`, `skip_stock_take`) VALUES
 ('MIS', 'Missing', NULL, DATE(NOW()), DATE(NOW()), '1', '1');";
 
-    return $this->slims->query($sql, ['drop', 'create', 'alter', 'insert']);
+    return $this->slims->query($sql, ['drop', 'create', 'alter', 'insert'], 13);
   }
 
   /**
@@ -318,7 +328,7 @@ PRIMARY KEY ( `member_id` )
     $sql['alter'][] = "ALTER TABLE `biblio` ADD `sor` VARCHAR( 200 ) COLLATE utf8_unicode_ci NULL AFTER `title` ;";
     $sql['insert'][] = "INSERT INTO `setting` (`setting_id`, `setting_name`, `setting_value`) VALUES (NULL , 'ignore_holidays_fine_calc', 'b:0;');";
 
-    return $this->slims->query($sql, ['alter', 'insert']);
+    return $this->slims->query($sql, ['alter', 'insert'], 14);
   }
 
   /**
@@ -357,7 +367,7 @@ ADD `user_type` SMALLINT( 2 ) NULL DEFAULT NULL AFTER `email` ,
 ADD `user_image` VARCHAR( 250 ) NULL DEFAULT NULL AFTER `user_type` ,
 ADD `social_media` TEXT NULL AFTER `user_image`;";
 
-    return $this->slims->query($sql, ['create', 'alter', 'insert', 'update']);
+    return $this->slims->query($sql, ['create', 'alter', 'insert', 'update'], 15);
   }
 
   /**
@@ -626,7 +636,7 @@ MODIFY `id` int(11) NOT NULL AUTO_INCREMENT,AUTO_INCREMENT=11;";
 
     $sql['alter'][] = "ALTER TABLE `content` ADD `is_news` SMALLINT(1) NULL DEFAULT NULL AFTER `content_path`;";
 
-    return $this->slims->query($sql, ['create', 'alter', 'delete', 'insert', 'update']);
+    return $this->slims->query($sql, ['create', 'alter', 'delete', 'insert', 'update'], 16);
   }
 
   /**
@@ -643,7 +653,7 @@ MODIFY `id` int(11) NOT NULL AUTO_INCREMENT,AUTO_INCREMENT=11;";
 
     $sql['alter'][] = "ALTER TABLE `mst_voc_ctrl` CHANGE `vocabolary_id` `vocabolary_id` INT(11) NOT NULL AUTO_INCREMENT;";
 
-    return $this->slims->query($sql, ['alter', 'insert']);
+    return $this->slims->query($sql, ['alter', 'insert'], 17);
   }
 
   /**
@@ -674,7 +684,7 @@ ADD INDEX (  `uid` ) ;";
 
     $sql['alter'][] = "ALTER TABLE `mst_voc_ctrl` ADD `scope` TEXT NULL DEFAULT NULL; ";
 
-    return $this->slims->query($sql, ['create', 'alter']);
+    return $this->slims->query($sql, ['create', 'alter'], 18);
   }
 
   /**
@@ -714,7 +724,7 @@ ADD  `last_update` DATETIME NULL DEFAULT NULL ,
 ADD  `uid` INT( 11 ) NULL DEFAULT NULL ,
 ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
 
-    return $this->slims->query($sql, ['create', 'alter']);
+    return $this->slims->query($sql, ['create', 'alter'], 19);
   }
 
   /**
@@ -804,7 +814,7 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
     LEFT JOIN mst_coll_type mct ON mct.coll_type_id=i.coll_type_id
     LEFT JOIN mst_member_type mmt ON mmt.member_type_id=m.member_type_id WHERE m.member_id IS NOT NULL AND b.biblio_id IS NOT NULL);";
 
-    $error = $this->slims->query($sql, ['create', 'insert']);
+    $error = $this->slims->query($sql, ['create', 'insert'], 20);
 
     // create trigger
     $query_trigger[] = "
@@ -821,7 +831,8 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
     SET is_lent=NEW.is_lent,
     is_return=NEW.is_return,
     renewed=NEW.renewed,
-    return_date=NEW.return_date
+    return_date=NEW.return_date,
+    last_update=NEW.last_update
     WHERE loan_id=NEW.loan_id;";
 
     $query_trigger[] = "
@@ -852,8 +863,8 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
      member_name=(SELECT m.member_name FROM member m WHERE m.member_id=NEW.member_id),
      member_type_name=(SELECT mmt.member_type_name FROM mst_member_type mmt LEFT JOIN member m ON m.member_type_id=mmt.member_type_id WHERE m.member_id=NEW.member_id);";
 
-    $error_trigger = $this->slims->queryTrigger($query_trigger);
-    $error = array_merge($error, $error_trigger);
+    // $error_trigger = $this->slims->queryTrigger($query_trigger,20);
+    $error = array_merge($error, /*$error_trigger*/);
 
     // fix mst_topic:classification
     $fix_classification = $this->slims->changeColumn('mst_topic', [
@@ -871,16 +882,12 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
   /**
    * Upgrade role to v9.1.0
    */
-  function upgrade_role_21()
-  {
-  }
+  function upgrade_role_21() {}
 
   /**
    * Upgrade role to v9.1.1
    */
-  function upgrade_role_22()
-  {
-  }
+  function upgrade_role_22() {}
 
   /**
    * Upgrade role to v9.2.0
@@ -933,7 +940,7 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
       PRIMARY KEY (`filelog_id`)
     ) ENGINE=MyISAM DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;";
 
-    $error = $this->slims->query($sql, ['alter','insert','create']);
+    $error = $this->slims->query($sql, ['alter', 'insert', 'create'], 23);
 
     return $error;
   }
@@ -941,23 +948,19 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
   /**
    * Upgrade role to v9.2.1
    */
-  function upgrade_role_24()
-  {
-  }
+  function upgrade_role_24() {}
 
   /**
    * Upgrade role to v9.2.2
    */
-  function upgrade_role_25()
-  {
-  }
+  function upgrade_role_25() {}
 
   /**
    * Upgrade role to v9.3.0
    */
   function upgrade_role_26()
   {
-      $sql['create'][] = "
+    $sql['create'][] = "
         CREATE TABLE IF NOT EXISTS `plugins` (
           `id` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
           `path` text COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -965,74 +968,68 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
           `uid` int(11) NOT NULL
         ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
-      $sql['alter'][] = "ALTER TABLE `group_access` ADD `menus` json NULL AFTER `module_id`;";
+    $sql['alter'][] = "ALTER TABLE `group_access` ADD `menus` json NULL AFTER `module_id`;";
 
-      $sql['alter'][] = "ALTER TABLE `biblio_attachment` ADD `placement` enum('link','popup','embed') COLLATE 'utf8_unicode_ci' NULL AFTER `file_id`;";
+    $sql['alter'][] = "ALTER TABLE `biblio_attachment` ADD `placement` enum('link','popup','embed') COLLATE 'utf8_unicode_ci' NULL AFTER `file_id`;";
 
-      $sql['alter'][] = "ALTER TABLE `system_log` ADD `sub_module` varchar(50) COLLATE 'utf8_unicode_ci' NULL AFTER `log_location`, ADD `action` varchar(50) COLLATE 'utf8_unicode_ci' NULL AFTER `sub_module`;";
+    $sql['alter'][] = "ALTER TABLE `system_log` ADD `sub_module` varchar(50) COLLATE 'utf8_unicode_ci' NULL AFTER `log_location`, ADD `action` varchar(50) COLLATE 'utf8_unicode_ci' NULL AFTER `sub_module`;";
 
-      $sql['alter'][] = "ALTER TABLE `files_read` CHANGE `member_id` `member_id` varchar(20) NULL AFTER `date_read`;";
+    $sql['alter'][] = "ALTER TABLE `files_read` CHANGE `member_id` `member_id` varchar(20) NULL AFTER `date_read`;";
 
-      $sql['alter'][] = "ALTER TABLE `backup_log` CHANGE `backup_file` `backup_file` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci NULL DEFAULT NULL;";
+    $sql['alter'][] = "ALTER TABLE `backup_log` CHANGE `backup_file` `backup_file` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci NULL DEFAULT NULL;";
 
-      return $this->slims->query($sql, ['create', 'alter']);
+    return $this->slims->query($sql, ['create', 'alter'], 26);
   }
 
-    /**
-     * Upgrade role to v9.3.1
-     */
-    function upgrade_role_27()
-    {
-    }
+  /**
+   * Upgrade role to v9.3.1
+   */
+  function upgrade_role_27() {}
 
-    /**
-     * Upgrade role to v9.4.0
-     */
-    function upgrade_role_28()
-    {
-        $sql['alter'][] = "ALTER TABLE `plugins`
+  /**
+   * Upgrade role to v9.4.0
+   */
+  function upgrade_role_28()
+  {
+    $sql['alter'][] = "ALTER TABLE `plugins`
                                 ADD `options` json NULL AFTER `path`,
                                 ADD `updated_at` datetime NULL AFTER `created_at`,
                                 ADD `deleted_at` datetime NULL AFTER `updated_at`;";
-        $sql['alter'][] = "ALTER TABLE `plugins` ADD UNIQUE `id` (`id`);";
+    $sql['alter'][] = "ALTER TABLE `plugins` ADD UNIQUE `id` (`id`);";
 
-        return $this->slims->query($sql, ['alter']);
+    return $this->slims->query($sql, ['alter'], 28);
+  }
+
+  /**
+   * Upgrade role to v9.4.1
+   */
+  function upgrade_role_29() {}
+
+  /**
+   * Upgrade role to v9.4.2
+   */
+  function upgrade_role_30() {}
+
+  /**
+   * Upgrade role to v9.5.0
+   */
+  function upgrade_role_31()
+  {
+    $sql['alter'][] = "ALTER TABLE `files` ADD `file_key` text COLLATE 'utf8_unicode_ci' NULL AFTER `file_desc`;";
+    if ($_POST['oldVersion'] ?? 0 > 19) {
+      $sql['alter'][] = "ALTER TABLE `biblio` DROP `update_date`;";
     }
+    $sql['alter'][] = "ALTER TABLE `mst_topic` CHANGE `classification` `classification` varchar(50) COLLATE 'utf8_unicode_ci' NULL COMMENT 'Classification Code' AFTER `auth_list`;";
+    $sql['alter'][] = "ALTER TABLE `content` ADD `is_draft` smallint(1) NULL DEFAULT '0' AFTER `is_news`, ADD `publish_date` date NULL AFTER `is_draft`;";
 
-    /**
-     * Upgrade role to v9.4.1
-     */
-    function upgrade_role_29()
-    {
-    }
-
-    /**
-     * Upgrade role to v9.4.2
-     */
-    function upgrade_role_30()
-    {
-    }
-
-    /**
-     * Upgrade role to v9.5.0
-     */
-    function upgrade_role_31()
-    {
-        $sql['alter'][] = "ALTER TABLE `files` ADD `file_key` text COLLATE 'utf8_unicode_ci' NULL AFTER `file_desc`;";
-        if($_POST['oldVersion'] > 19) {
-          $sql['alter'][] = "ALTER TABLE `biblio` DROP IF EXISTS `update_date`;";
-        }
-        $sql['alter'][] = "ALTER TABLE `mst_topic` CHANGE `classification` `classification` varchar(50) COLLATE 'utf8_unicode_ci' NULL COMMENT 'Classification Code' AFTER `auth_list`;";
-        $sql['alter'][] = "ALTER TABLE `content` ADD `is_draft` smallint(1) NULL DEFAULT '0' AFTER `is_news`, ADD `publish_date` date NULL AFTER `is_draft`;";
-
-        $sql['create'][] = "CREATE TABLE IF NOT EXISTS `index_words` (
+    $sql['create'][] = "CREATE TABLE IF NOT EXISTS `index_words` (
           `id` bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
-          `word` varchar(50) COLLATE 'utf8mb4_unicode_ci' NOT NULL,
+          `word` varchar(255) COLLATE 'utf8mb4_unicode_ci' NOT NULL,
           `num_hits` int NOT NULL,
           `doc_hits` int NOT NULL
         ) ENGINE='MyISAM' COLLATE 'utf8mb4_unicode_ci';";
 
-        $sql['create'][] = "CREATE TABLE IF NOT EXISTS `index_documents` (
+    $sql['create'][] = "CREATE TABLE IF NOT EXISTS `index_documents` (
           `document_id` int(11) NOT NULL,
           `word_id` bigint(20) NOT NULL,
           `location` varchar(50) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -1043,16 +1040,20 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
           KEY `location` (`location`)
         ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
-        return $this->slims->query($sql, ['create', 'alter']);
-    }
+    return $this->slims->query($sql, ['create', 'alter'], 31);
+  }
+  /**
+   * Upgrade role to v9.5.1
+   */
+  function upgrade_role_32() {}
 
-    /**
-     * Upgrade role to v9.5.2
-     */
-    function upgrade_role_32()
-    {
-        $sql['alter'][] = 'ALTER TABLE `search_biblio` DROP INDEX `title`, ADD FULLTEXT `title` (`title`, `series_title`)';
-        $sql['create'][] = "CREATE TABLE IF NOT EXISTS `biblio_mark` (
+  /**
+   * Upgrade role to v9.5.2
+   */
+  function upgrade_role_33()
+  {
+    $sql['alter'][] = 'ALTER TABLE `search_biblio` DROP INDEX `title`, ADD FULLTEXT `title` (`title`, `series_title`)';
+    $sql['create'][] = "CREATE TABLE IF NOT EXISTS `biblio_mark` (
           `id` varchar(32) NOT NULL,
           `member_id` varchar(20) NOT NULL,
           `biblio_id` int(11) NOT NULL,
@@ -1062,6 +1063,299 @@ ADD INDEX (  `input_date` ,  `last_update` ,  `uid` ) ;";
           KEY `biblio_id_idx` (`biblio_id`)
         ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
-        return $this->slims->query($sql, ['create', 'alter']);
+    return $this->slims->query($sql, ['create', 'alter'], 33);
+  }
+
+  /**
+   * Upgrade role to v9.6.0
+   */
+  function upgrade_role_34()
+  {
+    $sql['alter'][] = "ALTER TABLE `user` ADD `2fa` text COLLATE 'utf8_unicode_ci' NULL AFTER `passwd`;";
+    $sql['create'][] = "CREATE TABLE IF NOT EXISTS `mst_visitor_room` (
+          `id` int(11) NOT NULL AUTO_INCREMENT,
+          `name` varchar(50) NOT NULL,
+          `unique_code` varchar(5) NOT NULL COMMENT 'Code for identification each room',
+          `created_at` datetime DEFAULT NULL,
+          `updated_at`datetime NOT NULL DEFAULT current_timestamp(),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `unique_code_unq` (`unique_code`),
+          KEY `unique_code_idx` (`unique_code`)
+        ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+    $sql['alter'][] = "ALTER TABLE `visitor_count` ADD `room_code` varchar(5) COLLATE 'utf8_unicode_ci' NULL AFTER `institution`;";
+    $sql['alter'][] = "ALTER TABLE `visitor_count` ADD INDEX `room_code` (`room_code`);";
+    $sql['create'][] = "CREATE TABLE IF NOT EXISTS `cache` (
+          `name` varchar(64) NOT NULL,
+          `contents` text NOT NULL,
+          `created_at` datetime NOT NULL,
+          `updated_at` datetime NOT NULL,
+          `expired_at` datetime DEFAULT NULL,
+          UNIQUE KEY `name` (`name`)
+        ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+    $sql['update'][] = "UPDATE `mst_item_status` SET `skip_stock_take` = 1 WHERE `item_status_id` IN ('NL','R')";
+
+    return $this->slims->query($sql, ['create', 'alter', 'update'], 34);
+  }
+
+  /**
+   * Upgrade role to v9.6.1
+   */
+  function upgrade_role_35() {}
+
+  /**
+   * Upgrade role to v9.7.0
+   */
+  function upgrade_role_36()
+  {
+    $sql['create'][] = "CREATE TABLE `user_tokens` (
+            `id` int NOT NULL AUTO_INCREMENT,
+            `selector` varchar(255) NOT NULL,
+            `hashed_validator` varchar(255) NOT NULL,
+            `user_id` int NOT NULL,
+            `expires_at` datetime NOT NULL,
+            `created_at` datetime NOT NULL,
+            PRIMARY KEY (`id`)
+        ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+
+    $sql['create'][] = "CREATE TABLE IF NOT EXISTS `item_custom` (
+          `item_id` INT NOT NULL ,
+          PRIMARY KEY ( `item_id` )
+        ) ENGINE=MyISAM COMMENT = 'one to one relation with real item table';";
+
+    $sql['alter'][] = "ALTER TABLE `biblio` ADD INDEX `publisher_id` (`publisher_id`);";
+    $sql['alter'][] = "ALTER TABLE `biblio` CHANGE `source` `source` varchar(10) COLLATE 'utf8mb3_unicode_ci' NULL AFTER `language_id`;";
+    $sql['alter'][] = "ALTER TABLE `member` CHANGE `last_login_ip` `last_login_ip` varchar(50) COLLATE 'utf8mb3_unicode_ci' NULL AFTER `last_login`;";
+    $sql['alter'][] = "ALTER TABLE `user` CHANGE `last_login_ip` `last_login_ip` varchar(50) COLLATE 'utf8mb3_unicode_ci' NULL AFTER `last_login`;";
+    $sql['alter'][] = "ALTER IGNORE TABLE mst_voc_ctrl ADD UNIQUE idx_heading(topic_id, related_topic_id);";
+    return $this->slims->query($sql, ['create', 'alter'], 36);
+  }
+
+  /**
+   * Upgrade role to v9.7.1
+   */
+  function upgrade_role_37() {}
+
+  /**
+   * Upgrade role to v9.7.2
+   */
+  function upgrade_role_38()
+  {
+    // Use direct query execution for DROP TRIGGER statements for backward compatibility
+    $dbs = $this->slims->getDb();
+
+    $dropTriggers = [
+      "DROP TRIGGER IF EXISTS `delete_loan_history`",
+      "DROP TRIGGER IF EXISTS `update_loan_history`",
+      "DROP TRIGGER IF EXISTS `insert_loan_history`"
+    ];
+
+    $error = [];
+
+    // Execute DROP TRIGGER statements directly without prepared statements
+    foreach ($dropTriggers as $triggerSql) {
+      $result = mysqli_query($dbs, $triggerSql);
+      if (!$result) {
+        $error[] = "Error dropping trigger: " . mysqli_error($dbs);
+      }
     }
+
+    // Update submenu references from MD5 hash to menu keys
+    try {
+      $updatedCount = $this->updateSubMenu();
+
+      if ($updatedCount > 0) {
+        error_log("Successfully updated {$updatedCount} group_access records with new submenu format.");
+      } else {
+        error_log("No group_access records required submenu format updates.");
+      }
+    } catch (\Exception $e) {
+      $errorMsg = "Error updating submenu format: " . $e->getMessage();
+      error_log($errorMsg);
+      $error[] = $errorMsg;
+    }
+
+    return $error;
+  }
+
+  /**
+   * Upgrade role to v9.8.0
+   */
+  function upgrade_role_39()
+  {
+    // Optimize index
+    $sql['alter'][] = "ALTER TABLE `index_words` ADD INDEX `idx_word` (`word`(250));";
+    $sql['alter'][] = "ALTER TABLE `index_words` ADD INDEX `idx_word_hits` (`word`(245), `num_hits`);";
+    $sql['alter'][] = "ALTER TABLE `index_documents` ADD INDEX `idx_word_location` (`word_id`, `location`, `hit_count`);";
+    $sql['alter'][] = "ALTER TABLE `index_documents` ADD INDEX `idx_document_id` (`document_id`);";
+    $sql['alter'][] = "ALTER TABLE `index_words` MODIFY COLUMN `word` VARCHAR(255) NOT NULL;";
+
+
+    // Analyze index
+    $sql['analyze'][] = "ANALYZE TABLE `index_words`;";
+    $sql['analyze'][] = "ANALYZE TABLE `index_documents`;";
+
+    // Optimize index
+    $sql['optimize'][] = "OPTIMIZE TABLE `index_words`;";
+    $sql['optimize'][] = "OPTIMIZE TABLE `index_documents`;";
+
+    return $this->slims->query($sql, ['create', 'alter', 'analyze', 'optimize'], 39);
+  }
+
+  private function getSubMenuFromAllModules()
+  {
+    // get modules using mysqli directly
+    $dbs = $this->slims->getDb();
+    $sql = "SELECT * FROM mst_module";
+    $query = mysqli_query($dbs, $sql);
+
+    if (!$query) {
+      error_log("Error getting modules: " . mysqli_error($dbs));
+      return [];
+    }
+
+    $modules = [];
+    while ($row = mysqli_fetch_assoc($query)) {
+      $modules[] = $row;
+    }
+
+    $allMenus = [];
+    $modulesPath = __DIR__ . '/../admin/modules';
+
+    foreach ($modules as $module) {
+      // Check if module has required fields
+      if (!isset($module['module_path'])) {
+        continue;
+      }
+
+      $moduleDir = $module['module_path'];
+      $submenuFile = $modulesPath . '/' . $moduleDir . '/submenu.php';
+
+      if (file_exists($submenuFile)) {
+        // Initialize menu array for this module
+        $menu = [];
+
+        // Capture output and include the submenu file
+        ob_start();
+        try {
+          // Create necessary variables that might be used in submenu files
+          global $sysconf;
+
+          // Mock session for checking user privileges
+          if (!isset($_SESSION['uid'])) {
+            $_SESSION['uid'] = 1; // Set as admin for upgrade context
+          }
+
+          include $submenuFile;
+
+          // Add this module's menu to the collection
+          if (!empty($menu)) {
+            $allMenus[$moduleDir] = $menu;
+          }
+        } catch (\Exception $e) {
+          // Log error but continue with other modules
+          error_log("Error loading submenu for module {$moduleDir}: " . $e->getMessage());
+        }
+
+        // Clean output buffer
+        ob_end_clean();
+      }
+    }
+
+    return $allMenus;
+  }
+
+  private function updateSubMenu()
+  {
+    // Get database connection
+    $dbs = $this->slims->getDb();
+
+    // Get all submenus from all modules
+    $allMenus = $this->getSubMenuFromAllModules();
+
+    // Create mapping from MD5 hash to menu key
+    $hashToKeyMapping = [];
+
+    foreach ($allMenus as $moduleDir => $moduleMenus) {
+      foreach ($moduleMenus as $menuKey => $menuData) {
+        // Skip header items (they don't have URLs)
+        if (isset($menuData[0]) && $menuData[0] === 'Header') {
+          continue;
+        }
+
+        // Get the URL from menu data
+        if (isset($menuData[1])) {
+          $url = $menuData[1];
+
+          // Calculate MD5 hash of the URL
+          $urlHash = md5($url);
+
+          // Map hash to menu key
+          $hashToKeyMapping[$urlHash] = $menuKey;
+        }
+      }
+    }
+
+    // Get all group_access records that have menus using mysqli
+    $sql = "SELECT * FROM group_access WHERE menus IS NOT NULL AND menus != ''";
+    $query = mysqli_query($dbs, $sql);
+
+    if (!$query) {
+      error_log("Error getting group_access records: " . mysqli_error($dbs));
+      return 0;
+    }
+
+    $groupAccesses = [];
+    while ($row = mysqli_fetch_assoc($query)) {
+      $groupAccesses[] = $row;
+    }
+
+    $updateCount = 0;
+
+    foreach ($groupAccesses as $groupAccess) {
+      $menusJson = $groupAccess['menus'];
+      $menus = json_decode($menusJson, true);
+
+      if (!is_array($menus)) {
+        continue;
+      }
+
+      $updated = false;
+      $newMenus = [];
+
+      foreach ($menus as $menuItem) {
+        // Check if this menu item is a hash that we can convert to a key
+        if (isset($hashToKeyMapping[$menuItem])) {
+          // Replace hash with menu key
+          $newMenus[] = $hashToKeyMapping[$menuItem];
+          $updated = true;
+        } else {
+          // Keep the original item (might already be a key or unknown hash)
+          $newMenus[] = $menuItem;
+        }
+      }
+
+      // Update database if any changes were made
+      if ($updated) {
+        $newMenusJson = json_encode($newMenus);
+
+        // Use mysqli for update
+        $escapedMenusJson = mysqli_real_escape_string($dbs, $newMenusJson);
+        $groupId = intval($groupAccess['group_id']);
+        $moduleId = intval($groupAccess['module_id']);
+
+        $updateSql = "UPDATE group_access SET menus = '{$escapedMenusJson}' WHERE group_id = {$groupId} AND module_id = {$moduleId}";
+        $result = mysqli_query($dbs, $updateSql);
+
+        if ($result) {
+          $updateCount++;
+          error_log("Updated group_access: group_id={$groupAccess['group_id']}, module_id={$groupAccess['module_id']}");
+        } else {
+          error_log("Failed to update group_access: group_id={$groupAccess['group_id']}, module_id={$groupAccess['module_id']} - " . mysqli_error($dbs));
+        }
+      }
+    }
+
+    error_log("SubMenu update completed. Updated {$updateCount} records.");
+    return $updateCount;
+  }
 }

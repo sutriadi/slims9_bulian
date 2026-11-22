@@ -20,6 +20,8 @@
 
 /* Stock Take */
 
+use SLiMS\DB;
+
 // key to authenticate
 define('INDEX_AUTH', '1');
 // key to get full database access
@@ -59,17 +61,51 @@ if ($_SESSION['uid'] != '1') {
     </div>
 <?php
 $q_item = $dbs->query("SELECT last_update FROM item ORDER BY last_update DESC LIMIT 1");
+
+if ($q_item->num_rows < 1) {
+  die('
+  <div class="errorBox">
+    <strong>' . __('No item available. Stock take process is need item data') . '</strong>
+  </div>
+  ');
+}
+
+
 $d_item = $q_item->fetch_row();
 $q_backup = $dbs->query("SELECT backup_log_id FROM backup_log WHERE backup_time >= '{$d_item[0]}'");
-if ($q_backup->num_rows < 1 && !isset($_GET['skip_backup']) && !isset($_POST['saveData'])) {
+if ((DB::hasBackup(by: DB::BACKUP_BASED_ON_LAST_ITEM) === false) && !isset($_GET['skip_backup']) && !isset($_POST['saveData'])) {
+  $_SESSION['token'] = utility::createRandomString(32);
   ?>
     <div class="container-fluid">
         <hr>
         <p class="lead"><?= __('Before stock taking, it is recommended to backup your database first.') ?>
            <br/><?= __('Looks like you have not backed up before.'); ?></p>
-        <a href="<?= MWB.'system/backup.php'; ?>" class="btn btn-primary" title="<?= __('Goto System Module > Database Backup'); ?>"><?= __('Backup Now') ?></a>
+        <a href="<?= MWB.'system/backup_proc.php'; ?>" id="backupproc" class="notAJAX btn btn-primary"><?= __('Backup Now') ?></a>
         <a href="<?= MWB.'stock_take/init.php?skip_backup=1' ?>" class="btn btn-link" title="<?= __('Skip backup at your own risk!'); ?>"><?= __('Skip'); ?></a>
     </div>
+    <script>
+      $(document).ready(function(){
+        $('#backupproc').click(function(e) {
+          e.preventDefault()
+          
+          let currentLabel = $(this).html()
+
+          $(this).removeClass('btn-primary').addClass('btn-secondary')
+          $(this).html('<?= __('Please wait') ?>')
+
+          $.post($(this).attr('href'), {start:true,tkn:'<?= $_SESSION['token'] ?>',verbose:'no',response:'json'}, function(result, status, post){
+            var result = JSON.parse(result)
+            if (result.status)  {
+              $('#mainContent').simbioAJAX('<?= $_SERVER['PHP_SELF'] ?>')
+            } else {
+              $(this).html(currentLabel)
+              console.error(result.message)
+              window.toastr.error(result.message, '<?= __('Error') ?>')
+            }
+          });
+        })
+      })
+    </script>
   <?php
   exit();
 }
@@ -159,7 +195,7 @@ if ($stk_q->num_rows) {
         // update total_lost_item field value in stock_take table
         $update_total_q = $dbs->query('UPDATE stock_take SET total_item_stock_taked=' . $total_rows_d[0] . ', total_item_loan=' . $item_loan_d[0] . ', total_item_lost=' . $total_rows_d[0] . " WHERE stock_take_id=$stock_take_id");
         // write log
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'stock_take', $_SESSION['realname'] . ' initialize stock take (' . $data['stock_take_name'] . ') from address ' . $_SERVER['REMOTE_ADDR'], 'Initialize', 'OK');
+        writeLog('staff', $_SESSION['uid'], 'stock_take', $_SESSION['realname'] . ' initialize stock take (' . $data['stock_take_name'] . ') from address ' . $_SERVER['REMOTE_ADDR'], 'Initialize', 'OK');
         utility::jsAlert(__('Stock Taking Initialized'));
         echo '<script type="text/javascript">parent.location.href = \'' . SWB . 'admin/index.php?mod=stock_take\';</script>';
       } else {

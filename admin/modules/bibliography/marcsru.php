@@ -7,6 +7,7 @@
 # @Last modified time: 2017-09-22T11:01:48+07:00
 
 /* Perpustakaan Nasional SRU Web Services section */
+use SLiMS\Extension;
 
 // key to authenticate
 define('INDEX_AUTH', '1');
@@ -49,6 +50,22 @@ if (!$can_read) {
     die('<div class="errorBox">'.__('You are not authorized to view this section').'</div>');
 }
 
+# CHECK ACCESS
+if ($_SESSION['uid'] != 1) {
+    if (!utility::haveAccess('bibliography.marc-sru')) {
+        die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
+    }
+}
+
+$marcExtRequirement = [];
+if (!Extension::forFeature('MARC')->isFulfilled($marcExtRequirement)) {
+  die('<div class="errorBox">' . (sprintf(__('Feature MARC needs some PHP extension such as %s'), implode(',', $marcExtRequirement))) . '</div>');
+}
+
+if (!\Marc\XMLParser::isSupport()) {
+  die('<div class="errorBox">'.__('Extension XML is not enabled').'</div>');
+}
+
 // get servers
 $server_q = $dbs->query('SELECT name, uri FROM mst_servers WHERE server_type = 4 ORDER BY name ASC');
 while ($server = $server_q->fetch_assoc()) {
@@ -59,12 +76,12 @@ if (isset($_GET['marc_SRU_source'])) {
     $inList = (bool)count(array_filter($sysconf['marc_SRU_source'], fn($sru) => trim(urldecode($_GET['marc_SRU_source'])) == $sru['uri']));
     $zserver = $inList ? trim(urldecode($_GET['marc_SRU_source'])) : '';
 } else {
-    $zserver = 'http://opac.perpusnas.go.id/sru.aspx';
+    $zserver = 'https://opac.perpusnas.go.id/sru.aspx';
 }
 
 function getAcronym($sentence)
 {
-  $words = explode(' ', $sentenc);
+  $words = explode(' ', $sentence);
   $acronym = '';
   foreach ($words as $word) {
     $acronym .= trim($word)[0];
@@ -281,7 +298,7 @@ if (isset($_POST['saveZ']) AND isset($_SESSION['marcresult'])) {
         // update index
         $indexer->makeIndex($biblio_id);
         // write to logs
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography',sprintf(__('%s insert bibliographic data from MARC SRU service (server: %s) with title (%s) and biblio_id (%s)'),$_SESSION['realname'],$zserver,$data['title'],$biblio_id), 'MARC SRU', 'Add');         
+        writeLog('staff', $_SESSION['uid'], 'bibliography',sprintf(__('%s insert bibliographic data from MARC SRU service (server: %s) with title (%s) and biblio_id (%s)'),$_SESSION['realname'],$zserver,$data['title'],$biblio_id), 'MARC SRU', 'Add');         
         $r++;
     }
   }
@@ -324,7 +341,7 @@ if (isset($_GET['keywords'])) {
     } else {
       $keywords = urlencode('"'.trim($_GET['keywords']).'"');
     }
-    $request = $zserver.'?version=1.1&operation=searchRetrieve&query='.$keywords.'&startRecord=1&maximumRecords='.$max_record.'&maxitem='.$max_record.'&recordSchema=marc';
+    $request = $zserver.'?version=1.1&operation=searchRetrieve&query='.$keywords.'&startRecord=1&maximumRecords='.$max_record.'&maxitem='.$max_record;
   }
 
   $marc = new \Marc\XMLParser($request);

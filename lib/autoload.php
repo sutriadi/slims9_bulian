@@ -11,6 +11,7 @@ $namespaces = [
     "SLiMS\\" => "/",
     "Slims\\Opac\\" => "../src/Slims/Opac",
     "Volnix\\CSRF\\" => "/csrf/src/",
+    "Commands\\" => "../plugins/Commands/",
     "Psr\\SimpleCache\\" => "/psr/simple-cache/src/",
     "PhpOffice\\PhpSpreadsheet\\" => "/phpoffice/phpspreadsheet/src/PhpSpreadsheet/",
     "Ramsey\\Uuid\\" => "/uuid/src/",
@@ -30,10 +31,28 @@ $namespaces = [
     "Symfony\\Polyfill\\Mbstring\\" => "/symfony/polyfill-mbstring/",
     "Symfony\\Component\\Translation\\" => "/symfony/translation/",
     "Symfony\\Component\VarDumper\\" => "/symfony/var-dumper/",
+    "Symfony\Component\Console\\" => '/symfony/console/',
+    "Symfony\Component\String\\" => '/symfony/string/',
+    "Symfony\Component\Finder\\" => '/symfony/finder/',
+    "Symfony\Contracts\Service\\" => '/symfony/service-contracts/',
     "Symfony\\Contracts\\Translation\\" => "/symfony/translation-contracts/",
     "ZipStream\\" => "/maennchen/zipstream-php/src/",
     "Carbon\\" => "/nesbot/carbon/src/Carbon/",
     "Minigalnano\\" => "/minigalnano/",
+    "League\\Flysystem\\" => "/league/flysystem/src/",
+    "League\\MimeTypeDetection\\" => "/league/mime-type-detection/src/",
+    'ParagonIE\\ConstantTime\\' => '/paragonie/constant_time_encoding/src',
+    'OTPHP\\' => '/spomky-labs/otphp/src',
+    'DASPRiD\\Enum\\' => '/dasprid/enum/src',
+    'BaconQrCode\\' => '/bacon/bacon-qr-code/src',
+    'Gettext\\' => '/lang/gettext/gettext/src',
+    'Gettext\\Languages\\' => '/lang/gettext/languages/src',
+    'Gettext\\Scanner\\' => '/lang/gettext/php-scanner/src',
+    'PhpParser\\' => '/lang/gettext/php-parser/lib/PhpParser',
+    'Mpdf\\' => '/mpdf/src/',
+    'setasign\Fpdi\\' => '/setasign/fpdi/src/',
+    'Mpdf\\PsrLogAwareTrait\\' => '/psr-log-aware-trait/src/',
+    'Psr\\Log\\' => '/psr/log/Psr/Log',
 ];
 
 $class_alias = [];
@@ -70,4 +89,4 @@ include "symfony/polyfill-mbstring/bootstrap.php";
 include "nesbot/carbon/legacy.func.php";
 // Var-dumper
 // Load the global dump() function
-include 'symfony/var-dumper/Resources/functions/dump.php';
+// include 'symfony/var-dumper/Resources/functions/dump.php';

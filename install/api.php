@@ -7,6 +7,8 @@
 
 use Install\SLiMS;
 
+header('Content-Type: application/json');
+
 // key to authenticate
 define('INDEX_AUTH', '1');
 
@@ -16,6 +18,16 @@ session_start();
 require_once 'SLiMS.inc.php';
 
 $slims = new SLiMS();
+
+// success executed query list
+if (!isset($_SESSION['success_quries'])) {
+  $_SESSION['success_quries'] = [
+    'trigger' => [],
+    'regular' => []
+  ];
+}
+
+// if (isset($_GET['success_query'])) exit(json_encode($_SESSION['success_quries']??''));
 
 // switch request
 $_POST = json_decode(file_get_contents('php://input'), true);
@@ -34,9 +46,74 @@ if ($action === 're-install' || $action === 're-upgrade') {
   }
 }
 
+if (isset($_GET['storeage_engines'])) {
+  $isProfileExists = isset($_SESSION['db_host']) && 
+                     isset($_SESSION['db_name']) && 
+                     isset($_SESSION['db_user']) && 
+                     isset($_SESSION['db_pass']) && 
+                     isset($_SESSION['db_port']);
+
+  if (!$isProfileExists) die(json_encode(['status' => false]));
+
+  try {
+    $slims->createConnection($_SESSION['db_host'], $_SESSION['db_port']??'3306', $_SESSION['db_user'], $_SESSION['db_pass'], $_SESSION['db_name']);
+    $engines = $slims->getStorageEngines();
+    ksort($engines);
+    die(json_encode(['status' => true, 'data' => array_values($engines)]));
+  } catch (Exception $e) {
+    die(json_encode(['status' => false, 'message' => $e->getMessage()]));
+  }
+  exit;
+}
+
+if (isset($_GET['versionlist'])) {
+  $versionList = [
+    '-- Select Version --',
+    'Senayan 3 - Stable 3',
+    'Senayan 3 - Stable 4',
+    'Senayan 3 - Stable 5',
+    'Senayan 3 - Stable 6',
+    'Senayan 3 - Stable 7',
+    'Senayan 3 - Stable 8',
+    'Senayan 3 - Stable 9',
+    'Senayan 3 - Stable 10',
+    'Senayan 3 - Stable 11',
+    'Senayan 3 - Stable 12',
+    'Senayan 3 - Stable 13',
+    'Senayan 3 - Stable 14 | Seulanga',
+    'Senayan 3 - Stable 15 | Matoa',
+    'SLiMS 5 | Meranti',
+    'SLiMS 7 | Cendana',
+    'SLiMS 8 | Akasia',
+    'SLiMS 8.2 | Akasia',
+    'SLiMS 8.3 | Akasia',
+    'SLiMS 8.3.1 | Akasia',
+    'SLiMS 9.0.0 | Bulian',
+    'SLiMS 9.1.0 | Bulian',
+    'SLiMS 9.1.1 | Bulian',
+    'SLiMS 9.2.0 | Bulian',
+    'SLiMS 9.2.1 | Bulian',
+    'SLiMS 9.2.2 | Bulian',
+    'SLiMS 9.3.0 | Bulian',
+    'SLiMS 9.3.1 | Bulian',
+    'SLiMS 9.4.0 | Bulian',
+    'SLiMS 9.4.1 | Bulian',
+    'SLiMS 9.4.2 | Bulian',
+    'SLiMS 9.5.0 | Bulian',
+    'SLiMS 9.5.1 | Bulian',
+    'SLiMS 9.5.2 | Bulian',
+    'SLiMS 9.6.0 | Bulian',
+    'SLiMS 9.6.1 | Bulian',
+    'SLiMS 9.7.0 | Bulian D. Roger',
+    'SLiMS 9.7.1 | Bulian D. Roger',
+    'SLiMS 9.7.2 | Bulian D. Roger',
+  ];
+  die(json_encode(['status' => true, 'data' => $versionList]));
+}
+
 switch ($action) {
   case 'system-requirement':
-    $php_minimum_version = '7.4';
+    $php_minimum_version = '8.1';
     $check_dir = $slims->chkDir();
     $data = [
       'is_pass' => $slims->isPhpOk($php_minimum_version) &&
@@ -54,7 +131,7 @@ switch ($action) {
           'title' => 'Database driver',
           'status' => $slims->databaseDriverType(),
           'version' => $slims->databaseDriverType(),
-          'message' => 'SLiMS required MYSQL for database management. Please install it first!'
+          'message' => 'SLiMS required MySQLi and PDO MySQL extension for database management. Please install it first!'
         ],
         'phpextension' => [
           'title' => 'PHP Extension',
@@ -105,13 +182,12 @@ switch ($action) {
   case 'do-install':
   case 're-install':
     try {
+      define('ACTION', 'install');
       $slims->createConnection($_SESSION['db_host'], $_SESSION['db_port'], $_SESSION['db_user'], $_SESSION['db_pass']);
       // create if not exist
       if (!$slims->isDatabaseExist($_SESSION['db_name'])) $slims->createDatabase($_SESSION['db_name']);
       // use database
       $slims->getDb()->query("USE `{$_SESSION['db_name']}`");
-      // write configuration file
-      $slims->createConfigFile($_SESSION);
       // check if database already have table for make sure this database is empty
       foreach ($slims->getTables() as $table) {
         if ($table === 'biblio') {
@@ -151,6 +227,10 @@ switch ($action) {
 
       if (count($error) > 0) die(json_encode(['status' => false, 'message' => $error, 'code' => 5005]));
       // success
+      // write configuration file
+      $slims->createConfigFile($_SESSION);
+      // write environment file
+      $slims->createEnvFile();
       die(json_encode(['status' => true, 'message' => 'SLiMS Successful be installed']));
     } catch (Exception $exception) {
       if ($exception->getCode() === 5000 || $exception->getCode() === 5001) {
@@ -165,19 +245,49 @@ switch ($action) {
   case 're-upgrade':
     sleep(1);
     try {
+      define('ACTION', 'upgrade');
       $slims->createConnection($_SESSION['db_host'], $_SESSION['db_port'], $_SESSION['db_user'], $_SESSION['db_pass'], $_SESSION['db_name']);
       // write configuration file
       $slims->createConfigFile($_SESSION);
+      // write environment file
+      $slims->createEnvFile();
 
       if ($action === 're-upgrade') {
         $_POST['oldVersion'] = $_SESSION['oldVersion'];
       }
+
+      // Define mock functions that might be called in submenu files
+      if (!function_exists('do_checkIP')) {
+        function do_checkIP($permission) {
+          // Mock function for upgrade context
+          return true;
+        }
+      }
+      
+      if (!function_exists('__')) {
+        function __($text) {
+          // Mock translation function
+          return $text;
+        }
+      }
+      
+      // Define MWB constant if not defined (usually defined in admin context)
+      if (!defined('MWB')) {
+        define('MWB', '/admin/modules/');
+      }
+
+      if (!defined('MDLBS')) {
+        define('MDLBS', '../admin/modules/');
+      }
+
       require_once 'Upgrade.inc.php';
       $upgrade = Install\Upgrade::init($slims)->from($_POST['oldVersion']);
 
       if (count($upgrade) > 0) {
         die(json_encode(['status' => false, 'message' => $upgrade, 'code' => 5006]));
       }
+
+      unset($_SESSION['success_quries']);
 
       die(json_encode(['status' => true]));
     } catch (Exception $exception) {

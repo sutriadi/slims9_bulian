@@ -27,7 +27,13 @@ if (!defined('INDEX_AUTH')) {
 
 #use SLiMS\AdvancedLogging;
 use SLiMS\AlLibrarian;
+use SLiMS\Filesystems\Storage;
+use SLiMS\Form\FormAjaxWithCustomField;
 use SLiMS\Plugins;
+use SLiMS\SearchEngine\DefaultEngine;
+use SLiMS\SearchEngine\Engine;
+use SLiMS\SearchEngine\SphinxSearchEngine;
+use SLiMS\Ucs;
 
 // key to get full database access
 define('DB_ACCESS', 'fa');
@@ -57,7 +63,13 @@ $can_read = utility::havePrivilege('bibliography', 'r');
 $can_write = utility::havePrivilege('bibliography', 'w');
 
 if (!$can_read) {
-    die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
+    die('<div class="errorBox">' . __('_You are not authorized to view this section') . '</div>');
+}
+# CHECK ACCESS
+if ($_SESSION['uid'] != 1) {
+    if (!utility::haveAccess('bibliography.bibliography-list')) {
+        die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
+    }
 }
 
 // execute registered hook
@@ -106,9 +118,17 @@ if (isset($_POST['removeImage']) && isset($_POST['bimg']) && isset($_POST['img']
 }
 /* RECORD OPERATION */
 if (isset($_POST['saveData']) AND $can_read AND $can_write) {
+    # CHECK ACCESS
+    if ($_SESSION['uid'] != 1) {
+        if (!utility::haveAccess('bibliography.bibliography-add')) {
+            utility::jsToastr('Bibliography', __('You are not authorized to view this section'), 'error');
+            writeLog('staff', $_SESSION['uid'], 'system', $_SESSION['realname'] . ' try to access bibliography module without having access right from ' . $_SERVER['REMOTE_ADDR']);
+            exit();
+        }
+    }
     if (!simbio_form_maker::isTokenValid()) {
         utility::jsToastr('Bibliography', __('Invalid form submission token!'), 'error');
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'system', 'Invalid form submission token, might be a CSRF attack from ' . $_SERVER['REMOTE_ADDR']);
+        writeLog('staff', $_SESSION['uid'], 'system', 'Invalid form submission token, might be a CSRF attack from ' . $_SERVER['REMOTE_ADDR']);
         exit();
     }
     $title = trim(strip_tags($_POST['title']));
@@ -224,52 +244,83 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
         $data['last_update'] = date('Y-m-d H:i:s');
 
         // image uploading
+        $images_disk = Storage::images();
         if (!empty($_FILES['image']) AND $_FILES['image']['size']) {
-            // create upload object
-            $image_upload = new simbio_file_upload();
-            $image_upload->setAllowableFormat($sysconf['allowed_images']);
-            $image_upload->setMaxSize($sysconf['max_image_upload'] * 1024);
-            $image_upload->setUploadDir(IMGBS . 'docs');
-
+            // Title
             $img_title = $data['title'].'_'.date("YmdHis");
             if(strlen($data['title']) > 70){
                 $img_title = substr($data['title'], 0, 70).'_'.date("YmdHis");
             }
 
-            $new_filename = strtolower('cover_'. preg_replace("/[^a-zA-Z0-9]+/", "-", $img_title));
-            // upload the file and change all space characters to underscore
-            $img_upload_status = $image_upload->doUpload('image', $new_filename);
-            if ($img_upload_status == UPLOAD_SUCCESS) {
-                $data['image'] = $dbs->escape_string($image_upload->new_filename);
+            // create upload object
+            $image_upload = $images_disk->upload('image', function($images) use($sysconf) {
+                // Extension check
+                $images->isExtensionAllowed($sysconf['allowed_images']);
+
+                // File size check
+                $images->isLimitExceeded($sysconf['max_image_upload']*1024);
+
+                // destroy it if failed
+                if (!empty($images->getError())) $images->destroyIfFailed();
+
+                // remove exif data
+                if (empty($images->getError())) $images->cleanExifInfo();
+
+                $images->sanitizeImageWithGD();
+
+            })->as('docs/' . strtolower('cover_'. preg_replace("/[^a-zA-Z0-9]+/", "-", $img_title)));
+
+            
+            if ($image_upload->getUploadStatus()) {
+                $data['image'] = $dbs->escape_string($image_upload->getUploadedFileName());
                 // write log
-                utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' upload image file ' . $image_upload->new_filename);
+                writeLog('staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' upload image file ' . $image_upload->getUploadedFileName());
                 utility::jsToastr('Bibliography', __('Image Uploaded Successfully'), 'success');
             } else {
                 // write log
                 $data['image'] = NULL;
-                utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography', 'ERROR : ' . $_SESSION['realname'] . ' FAILED TO upload image file ' . $image_upload->new_filename . ', with error (' . $image_upload->error . ')');
-                utility::jsToastr('Bibliography', __('Image Uploaded Failed').'<br/>'.$image_upload->error, 'error');
+                writeLog('staff', $_SESSION['uid'], 'bibliography', 'ERROR : ' . $_SESSION['realname'] . ' FAILED TO upload image file ' . $image_upload->getUploadedFileName() . ', with error (' . $image_upload->getError() . ')');
+                utility::jsToastr('Bibliography', __('Image Uploaded Failed').'<br/>'.$image_upload->getError(), 'error');
             }
         } else if (!empty($_POST['base64picstring'])) {
             list($filedata, $filedom) = explode('#image/type#', $_POST['base64picstring']);
-            $filedata = base64_decode($filedata);
-            $fileinfo = getimagesizefromstring($filedata);
-            $valid = strlen($filedata) / 1024 < $sysconf['max_image_upload'];
-            $valid = (!$fileinfo || $valid === false) ? false : in_array($fileinfo['mime'], $sysconf['allowed_images_mimetype']);
+            $filedata = base64_decode(trim($filedata), true);
+            $fileinfo = $filedata !== false ? getimagesizefromstring($filedata) : false;
+            $fileMime = $fileinfo ? ($fileinfo['mime'] ?? '') : '';
+            $filedom = $fileinfo ? ltrim(strtolower(image_type_to_extension($fileinfo[2], false)), '.') : strtolower($filedom);
+            $filedom = $fileMime && !$filedom && strpos($fileMime, 'image/') === 0 ? substr($fileMime, 6) : $filedom;
+            $fileMimeLower = strtolower($fileMime);
+
+            $sizeAllowed = $filedata !== false && (strlen($filedata) <= ($sysconf['max_image_upload'] * 1024));
+            $allowedMimes = array_map('strtolower', (array)$sysconf['allowed_images_mimetype']);
+            $allowedExts = array_map('strtolower', (array)$sysconf['allowed_images']);
+            $mimeAllowed = $fileMime && in_array($fileMimeLower, $allowedMimes, true);
+            $extAllowed = $filedom && in_array($filedom, $allowedExts, true);
+            $valid = $fileinfo && $sizeAllowed && $mimeAllowed && $extAllowed;
             $new_filename = strtolower('cover_'
-                . preg_replace("/[^a-zA-Z0-9]+/", "_", $data['title'])
+                . preg_replace("/[^a-zA-Z0-9]+/", "_", substr($data['title'], 0,70)) . '-' . date('this')
                 . '.' . $filedom);
 
-            if ($valid AND file_put_contents(IMGBS . 'docs/' . $new_filename, $filedata)) {
-                $data['image'] = $dbs->escape_string($new_filename);
-                if (!defined('UPLOAD_SUCCESS')) define('UPLOAD_SUCCESS', 1);
-                $upload_status = UPLOAD_SUCCESS;
+            if ($valid) {
+                @$images_disk->put('docs/' . $new_filename, $filedata);
+                
+                if ($images_disk->isExists('docs/' . $new_filename))
+                {
+                    $data['image'] = $dbs->escape_string($new_filename);
+                    if (!defined('UPLOAD_SUCCESS')) define('UPLOAD_SUCCESS', 1);
+                    $upload_status = UPLOAD_SUCCESS;
+                }
+            } else {
+                utility::jsToastr('Bibliography', __('Image Uploaded Failed').'<br/>'.__('Cropped image data is invalid, uses disallowed type, or exceeds max size.'), 'error');
             }
         }
 
         // create sql op object
         $sql_op = new simbio_dbop($dbs);
         if (isset($_POST['updateRecordID'])) {
+            $_POST['updateRecordID'] = (integer)$_POST['updateRecordID'];
+
+            if ($_POST['updateRecordID'] < 1) { die("Invalid updateRecordID"); }
             if ($sysconf['log']['biblio']) {
                 $_prevrawdata = api::biblio_load($dbs, $_POST['updateRecordID']);
             }
@@ -315,7 +366,7 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
                     echo '<script type="text/javascript">parent.ucsUpload(\'' . MWB . 'bibliography/ucs_upload.php\', \'itemID[]=' . $updateRecordID . '\', false);</script>';
                 }
                 // write log
-                utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' update bibliographic data (' . $data['title'] . ') with biblio_id (' . $updateRecordID . ')');
+                writeLog('staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' update bibliographic data (' . $data['title'] . ') with biblio_id (' . $updateRecordID . ')');
 
                 if ($sysconf['log']['biblio']) {
                     $_currrawdata = api::biblio_load($dbs, $updateRecordID);
@@ -338,10 +389,11 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
             } else {
                 utility::jsToastr('Bibliography', __('Bibliography Data FAILED to Updated. Please Contact System Administrator') . "\n" . $sql_op->error, 'error');
             }
+
         } else {
 
             // execute registered hook
-            Plugins::getInstance()->execute(Plugins::BIBLIOGRAPHY_BEFORE_SAVE, ['data' => $data]);
+            Plugins::getInstance()->execute(Plugins::BIBLIOGRAPHY_BEFORE_SAVE, ['data' => &$data]);
 
             /* INSERT RECORD MODE */
             // insert the data
@@ -352,7 +404,7 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
 
                 // execute registered hook
                 $data['biblio_id'] = $last_biblio_id;
-                Plugins::getInstance()->execute(Plugins::BIBLIOGRAPHY_AFTER_SAVE, ['data' => $data]);
+                Plugins::getInstance()->execute(Plugins::BIBLIOGRAPHY_AFTER_SAVE, ['data' => &$data]);
 
                 // add authors
                 if ($_SESSION['biblioAuthor']) {
@@ -384,10 +436,9 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
                     @$sql_op->insert('biblio_custom', $custom_data);
                 }
 
-
                 utility::jsToastr('Bibliography', __('New Bibliography Data Successfully Saved'), 'success');
                 // write log
-                utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' insert bibliographic data (' . $data['title'] . ') with biblio_id (' . $last_biblio_id . ')');
+                writeLog('staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' insert bibliographic data (' . $data['title'] . ') with biblio_id (' . $last_biblio_id . ')');
                 if ($sysconf['log']['biblio']) {
                     $_rawdata = api::biblio_load($dbs, $last_biblio_id);
                     api::bibliolog_write($dbs, $last_biblio_id, $_SESSION['uid'], $_SESSION['realname'], $data['title'], 'create', 'description', $_rawdata, 'New data. Bibliography.');
@@ -425,39 +476,33 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
                 utility::jsToastr('Bibliography', sprintf(__('Item Data FAILED to Save. Insert batch item maximum %s copies'), $sysconf['max_insert_batch']), 'warning');
                 die();
             }
-
-            // get zeros
             preg_match($regex, $pattern, $result);
             $zeros = strlen($result[0]);
-
-            // get chars
             $chars = preg_split($regex, $pattern);
-
+            $chars_first = trim($chars[0]); 
             $chars_last = (isset($chars[1]) && !empty(trim($chars[1]))) ? trim($chars[1]) : '';
-
-            // get last number from database
-            $last_q = $dbs->query('SELECT item_code FROM item WHERE item_code REGEXP \'^' . $chars[0] . '[0-9]{3,}' . $chars_last . '$\' ORDER BY item_code DESC LIMIT 1');
+            $safe_chars_first = preg_quote($chars_first, '/');
+            $safe_chars_last = preg_quote($chars_last, '/');
+            $sql_pattern = '^' . $safe_chars_first . '[0-9]{'.$zeros.',}' . $safe_chars_last . '$';
+            $last_q = $dbs->query("SELECT item_code FROM item WHERE item_code REGEXP '{$sql_pattern}' ORDER BY item_code DESC LIMIT 1");
             if (!$dbs->errno && $last_q->num_rows > 0) {
                 $last_d = $last_q->fetch_row();
-                // get last  number
-                $ptn = '/' . $chars[0] . '|' . $chars_last . '$/';
+                $ptn = '/' . $safe_chars_first . '|' . $safe_chars_last . '$/';
                 $last = preg_replace($ptn, '', $last_d[0]);
                 $start = intval($last) + 1;
             } else {
                 $start = 1;
             }
-
+            $start = $start+1;
             $end = $start + $total;
             for ($b = $start; $b < $end; $b++) {
-                $len = strlen($b);
-                $itemcode = $chars[0];
+                $itemcode = $chars_first; 
                 if ($zeros > 0) {
-                    $itemcode .= preg_replace('@0{' . $len . '}$@i', $b, $result[0]);
+                    $itemcode .= str_pad((string)$b, $zeros, '0', STR_PAD_LEFT);
                 } else {
                     $itemcode .= $b;
                 }
-                $itemcode .= $chars[1];
-
+                $itemcode .= $chars_last;
                 $item_insert_sql = sprintf("INSERT IGNORE INTO item (biblio_id, item_code, received_date, supplier_id, order_no, order_date, item_status_id, site, source, invoice, price, price_currency, invoice_date, call_number, coll_type_id, location_id, input_date, last_update, uid)
         VALUES ( %d, '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', %d)",
                     isset($updateRecordID) ? $updateRecordID : $last_biblio_id, $itemcode, $dbs->escape_string($_POST['recvDate']), intval($_POST['supplierID']), $dbs->escape_string($_POST['ordNo']), $dbs->escape_string($_POST['orDate']), $dbs->escape_string($_POST['itemStatusID']), $dbs->escape_string($_POST['itemSite']), intval($_POST['source']), $dbs->escape_string($_POST['invoice']), intval($_POST['price']), $dbs->escape_string($_POST['priceCurrency']), $dbs->escape_string($_POST['invcDate']), $data['call_number'], intval($_POST['collTypeID']), $dbs->escape_string($_POST['locationID']), date('Y-m-d H:i:s'), date('Y-m-d H:i:s'), $_SESSION['uid']);
@@ -468,7 +513,10 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
             $indexer->updateItems((isset($updateRecordID) ? $updateRecordID : $last_biblio_id));
         }
 
-        echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . MWB . 'bibliography/index.php\', {method: \'post\', addData: \'itemID=' . (isset($updateRecordID) ? $updateRecordID : $last_biblio_id) . '&detail=true\'});</script>';
+        #$isset = array_key_exists('last_biblio_id', get_defined_vars());
+        if (array_key_exists('last_biblio_id', get_defined_vars())) {
+            echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . MWB . 'bibliography/index.php\', {method: \'post\', addData: \'itemID=' . (isset($updateRecordID) ? $updateRecordID : $last_biblio_id) . '&detail=true\'});</script>';
+        }
         exit();
     }
     exit();
@@ -478,7 +526,7 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
     }
     if (!simbio_form_maker::isTokenValid()) {
         utility::jsToastr('Bibliography', __('Invalid form submission token!'), 'error');
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'system', 'Invalid form submission token, might be a CSRF attack from ' . $_SERVER['REMOTE_ADDR']);
+        writeLog('staff', $_SESSION['uid'], 'system', 'Invalid form submission token, might be a CSRF attack from ' . $_SERVER['REMOTE_ADDR']);
         exit();
     }
 
@@ -504,11 +552,12 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
       WHERE b.biblio_id=%d GROUP BY title', $itemID);
         $biblio_item_q = $dbs->query($_sql_biblio_item_q);
         $biblio_item_d = $biblio_item_q->fetch_row();
-        if ($biblio_item_d[1] < 1) {
+        
+        if (($biblio_item_d[1]??0) < 1) {
 
             if ($sysconf['log']['biblio']) {
                 $_rawdata = api::biblio_load($dbs, $itemID);
-                api::bibliolog_write($dbs, $itemID, $_SESSION['uid'], $_SESSION['realname'], $biblio_item_d[0], 'delete', 'description', $_rawdata, 'Data bibliografi dihapus.');
+                api::bibliolog_write($dbs, $itemID, $_SESSION['uid'], $_SESSION['realname'], $biblio_item_d[0]??'Item Undefined', 'delete', 'description', $_rawdata, 'Data bibliografi dihapus.');
             }
 
             // execute registered hook
@@ -522,7 +571,7 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
                 Plugins::getInstance()->execute(Plugins::BIBLIOGRAPHY_AFTER_DELETE, [$itemID]);
 
                 // write log
-                utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' DELETE bibliographic data (' . $biblio_item_d[0] . ') with biblio_id (' . $itemID . ')');
+                writeLog('staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'] . ' DELETE bibliographic data (' . ($biblio_item_d[0]??'?') . ') with biblio_id (' . $itemID . ')');
                 // delete related data
                 $sql_op->delete('biblio_topic', "biblio_id=$itemID");
                 $sql_op->delete('biblio_author', "biblio_id=$itemID");
@@ -534,23 +583,24 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
 
                 // delete serial data
                 // check kardex if exist
-                $_sql_serial_kardex_q = sprintf('SELECT b.title, COUNT(kardex_id),s.serial_id FROM biblio AS b
-          LEFT JOIN `serial` AS s ON b.biblio_id=s.biblio_id
-          LEFT JOIN kardex AS k ON s.serial_id=k.serial_id
-          WHERE b.biblio_id=%d GROUP BY title', $itemID);
+                $_sql_serial_kardex_q = sprintf(' SELECT biblio_id, serial_id 
+                FROM serial WHERE biblio_id=%d', $itemID);
                 $serial_kardex_q = $dbs->query($_sql_serial_kardex_q);
                 if ($serial_kardex_q) {
-                    $serial_kardex_d = $serial_kardex_q->fetch_row();
-                    // delete kardex
-                    if ($serial_kardex_d[1] > 1) {
-                        $sql_op->delete('kardex', "serial_id=" . $serial_kardex_d[2]);
-                    }
+                    while ($data = $serial_kardex_q->fetch_row()) {
+                        $sql_op->delete('kardex', "serial_id=" . $data[1]);
+                    };
                 }
                 //delete serial data
                 $sql_op->delete('serial', "biblio_id=$itemID");
 
+                //delete custom data
+                $sql_op->delete('biblio_custom', "biblio_id=$itemID");
+
                 // add to http query for UCS delete
                 $http_query .= "itemID[]=$itemID&";
+                $_itemID[] = $itemID;
+                $itemIDs = implode(',', $_itemID);
             }
         } else {
             $still_have_item[] = substr($biblio_item_d[0], 0, 45) . '... still have ' . $biblio_item_d[1] . ' copies';
@@ -564,25 +614,24 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
             $titles .= $title . "\n";
         }
         utility::jsToastr('Bibliography', __('Below data can not be deleted:') . "\n" . $titles, 'error');
-        echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . $_SERVER['PHP_SELF'] . '\', {addData: \'' . $_POST['lastQueryStr'] . '\'});</script>';
+        echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . $_SERVER['PHP_SELF'] . '\', {addData: \'' . ($_POST['lastQueryStr']??$_SERVER['HTTP_REFERER']??'') . '\'});</script>';
         exit();
     }
     // auto delete data on UCS if enabled
     if ($http_query && $sysconf['ucs']['enable'] && $sysconf['ucs']['auto_delete']) {
-        echo '<script type="text/javascript">parent.ucsUpdate(\'' . MWB . 'bibliography/ucs_update.php\', \'nodeOperation=delete&' . $http_query . '\');</script>';
+        Ucs::auto_delete($itemIDs);
     }
     // error alerting
     if ($error_num == 0) {
         utility::jsToastr('Bibliography', __('All Data Successfully Deleted'), 'success');
-        echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . $_SERVER['PHP_SELF'] . '\', {addData: \'' . $_POST['lastQueryStr'] . '\'});</script>';
+        echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . $_SERVER['PHP_SELF'] . '\', {addData: \'' . ($_POST['lastQueryStr']??$_SERVER['HTTP_REFERER']??'') . '\'});</script>';
     } else {
         utility::jsToastr('Bibliography', __('Some or All Data NOT deleted successfully!\nPlease contact system administrator'), 'warning');
-        echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . $_SERVER['PHP_SELF'] . '\', {addData: \'' . $_POST['lastQueryStr'] . '\'});</script>';
+        echo '<script type="text/javascript">parent.$(\'#mainContent\').simbioAJAX(\'' . $_SERVER['PHP_SELF'] . '\', {addData: \'' . ($_POST['lastQueryStr']??$_SERVER['HTTP_REFERER']??'') . '\'});</script>';
     }
     exit();
 }
 /* RECORD OPERATION END */
-
 if (!$in_pop_up) {
     /* search form */
     ?>
@@ -689,6 +738,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
 
     echo $datagrid_result;
 } elseif (isset($_POST['detail']) OR (isset($_GET['action']) AND $_GET['action'] == 'detail')) {
+    # CHECK ACCESS
+    if ($_SESSION['uid'] != 1) {
+        if (!utility::haveAccess('bibliography.bibliography-add')) {
+            die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
+        }
+    }
+
     if ((isset($_GET['action'])) AND ($_GET['action'] == 'detail')) {
         # ADV LOG SYSTEM - STIIL EXPERIMENTAL
         $log = new AlLibrarian('1153', array("username" => $_SESSION['uname'], "uid" => $_SESSION['uid'], "realname" => $_SESSION['realname']));
@@ -711,7 +767,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     $rec_d = $rec_q->fetch_assoc();
 
     // create new instance
-    $form = new simbio_form_table_AJAX('mainForm', $_SERVER['PHP_SELF'] . '?' . $_SERVER['QUERY_STRING'], 'post');
+    $form = new FormAjaxWithCustomField('mainForm', $_SERVER['PHP_SELF'] . '?' . $_SERVER['QUERY_STRING'], 'post');
     $form->submit_button_attr = 'name="saveData" value="' . __('Save') . '" class="s-btn btn btn-default"';
     // form table attributes
     $form->table_attr = 'id="dataList" cellpadding="0" cellspacing="0"';
@@ -760,13 +816,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
 
     /* Form Element(s) */
     // biblio title
-    $form->addTextField('textarea', 'title', __('Title') . '*', $rec_d['title'] ?? '', 'rows="1" class="form-control"',
+    $form->addTextField('textarea', 'title', __('Title') . '*', stripslashes(($rec_d ?? [])['title'] ?? ''), 'rows="1" class="form-control"',
         __('Main title of collection. Separate child title with colon and pararel title with equal (=) sign.'));
 
     // biblio authors
     // $str_input = '<div class="'.$visibility.'"><a class="notAJAX button" href="javascript: openHTMLpop(\''.MWB.'bibliography/pop_author.php?biblioID='.$rec_d['biblio_id'].'\', 500, 200, \''.__('Authors/Roles').'\')">'.__('Add Author(s)').'</a></div>';
     $str_input = '<div class="' . $visibility . '"><a class="s-btn btn btn-default notAJAX openPopUp" href="' . MWB . 'bibliography/pop_author.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '" title="' . __('Authors/Roles') . '">' . __('Add Author(s)') . '</a></div>';
-    $str_input .= '<iframe name="authorIframe" id="authorIframe" class="form-control" style="width: 100%; height: 100px;" src="' . MWB . 'bibliography/iframe_author.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
+    $str_input .= '<iframe name="authorIframe" id="authorIframe" class="form-control auto-resize-iframe" style="width: 100%; min-height: 80px; max-height: 300px;" src="' . MWB . 'bibliography/iframe_author.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
     $form->addAnything(__('Author(s)'), $str_input);
 
     // modified by hendro wicaksono
@@ -789,7 +845,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
         // empty pattern
         $pattern_options = array(array('', '-- ' . __('Choose pattern') . ' --'));
         $pattern_d = $pattern_q->fetch_row();
-        $val = @unserialize($pattern_d[0]);
+        $val = unserialize($pattern_d[0]??'');
         if (!empty($val)) {
             foreach ($val as $v) {
                 $pattern_options[] = array($v, $v);
@@ -885,7 +941,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     if (!$in_pop_up AND $form->edit_mode) {
         // $str_input = '<div class="makeHidden s-margin__bottom-1"><a class="notAJAX button" href="javascript: openHTMLpop(\''.MWB.'bibliography/pop_item.php?inPopUp=true&action=detail&biblioID='.$rec_d['biblio_id'].'\', 650, 400, \''.__('Items/Copies').'\')">'.__('Add New Items').'</a></div>';
         $str_input = '<div class="makeHidden s-margin__bottom-1"><a class="s-btn btn btn-default notAJAX openPopUp" href="' . MWB . 'bibliography/pop_item.php?inPopUp=true&action=detail&biblioID=' . $rec_d['biblio_id'] . '" title="' . __('Items/Copies') . '" width="780" height="500">' . __('Add New Items') . '</a></div>';
-        $str_input .= '<iframe name="itemIframe" id="itemIframe" class="form-control" style="width: 100%; height: 100px;" src="' . MWB . 'bibliography/iframe_item_list.php?biblioID=' . $rec_d['biblio_id'] . '&block=1"></iframe>' . "\n";
+        $str_input .= '<iframe name="itemIframe" id="itemIframe" class="form-control auto-resize-iframe" style="width: 100%; height: 100px; min-height: 80px; max-height: 400px;" src="' . MWB . 'bibliography/iframe_item_list.php?biblioID=' . $rec_d['biblio_id'] . '&block=1"></iframe>' . "\n";
         $form->addAnything(__('Item(s) Data'), $str_input);
     }
     // biblio gmd
@@ -936,7 +992,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
             $publ_options[] = array($publ_d[0], $publ_d[1]);
         }
     }
-    $form->addSelectList('publisherID', __('Publisher'), $publ_options, $rec_d['publisher_id'] ?? '', 'class="select2" data-src="' . SWB . 'admin/AJAX_lookup_handler.php?format=json&allowNew=true" data-src-table="mst_publisher" data-src-cols="publisher_id:publisher_name"');
+    $form->addSelectList('publisherID', __('Publisher'), $publ_options, $rec_d['publisher_id'] ?? '', 'class="select2" data-src="' . SWB . 'admin/AJAX_lookup_handler.php" data-src-table="new:mst_publisher" data-src-cols="publisher_id:publisher_name"');
     // biblio publish year
     $form->addTextField('text', 'year', __('Publishing Year'), $rec_d['publish_year'] ?? '', 'class="form-control" style="width: 40%;"', __('Year of publication'));
     // biblio publish place
@@ -947,7 +1003,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
             $plc_options[] = array($plc_d[0], $plc_d[1]);
         }
     }
-    $form->addSelectList('placeID', __('Publishing Place'), $plc_options, $rec_d['publish_place_id'] ?? '', 'class="select2" data-src="' . SWB . 'admin/AJAX_lookup_handler.php?format=json&allowNew=true" data-src-table="mst_place" data-src-cols="place_id:place_name"');
+    $form->addSelectList('placeID', __('Publishing Place'), $plc_options, $rec_d['publish_place_id'] ?? '', 'class="select2" data-src="' . SWB . 'admin/AJAX_lookup_handler.php" data-src-table="new:mst_place" data-src-cols="place_id:place_name"');
     // biblio collation
     $form->addTextField('text', 'collation', __('Collation'), $rec_d['collation'] ?? '', 'class="form-control" style="width: 40%;"', __('Physical description of a publication e.g. publication length, width, page numbers, etc.'));
     // biblio series title
@@ -957,13 +1013,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     if (isset($rec_d['classification'])) {
         $cls_options[] = array($rec_d['classification'], $rec_d['classification']);
     }
-    $form->addSelectList('class', __('Classification'), $cls_options, $rec_d['classification'] ?? '', 'class="select2" data-src="' . SWB . 'admin/AJAX_lookup_handler.php?format=json&allowNew=true" data-src-table="mst_topic" data-src-cols="classification:classification:topic"');
+    $form->addSelectList('class', __('Classification'), $cls_options, $rec_d['classification'] ?? '', 'class="select2" data-src="' . SWB . 'admin/AJAX_lookup_handler.php" data-src-table="new:mst_topic" data-src-cols="classification:classification:topic"');
     // biblio call_number
     $form->addTextField('text', 'callNumber', __('Call Number'), $rec_d['call_number'] ?? '', 'class="form-control" style="width: 40%;"', __('Sets of ID that put in the book spine.'));
     // biblio topics
     // $str_input = '<div class="'.$visibility.'"><a class="notAJAX button" href="javascript: openHTMLpop(\''.MWB.'bibliography/pop_topic.php?biblioID='.$rec_d['biblio_id'].'\', 500, 200, \''.__('Subjects/Topics').'\')">'.__('Add Subject(s)').'</a></div>';
     $str_input = '<div class="' . $visibility . ' s-margin__bottom-1"><a class="s-btn btn btn-default notAJAX openPopUp" href="' . MWB . 'bibliography/pop_topic.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '" title="' . __('Subjects/Topics') . '">' . __('Add Subject(s)') . '</a></div>';
-    $str_input .= '<iframe name="topicIframe" id="topicIframe" class="form-control" style="width: 100%; height: 100px;" src="' . MWB . 'bibliography/iframe_topic.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
+    $str_input .= '<iframe name="topicIframe" id="topicIframe" class="form-control auto-resize-iframe" style="width: 100%; height: 100px; min-height: 80px; max-height: 300px;" src="' . MWB . 'bibliography/iframe_topic.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
     $form->addAnything(__('Subject(s)'), $str_input);
     // biblio language
     // get language data related to this record from database
@@ -983,9 +1039,11 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     if ($in_pop_up) {
         $upper_dir = '../../';
     }
-    if (isset($rec_d['image']) && file_exists('../../../images/docs/' . $rec_d['image'])) {
-        $str_input .= '<a href="' . SWB . 'images/docs/' . ($rec_d['image'] ?? '') . '" class="openPopUp notAJAX" title="' . __('Click to enlarge preview') . '">';
-        $str_input .= '<img src="' . $upper_dir . '../images/docs/' . urlencode($rec_d['image'] ?? '') . '" class="img-fluid rounded" alt="Image cover">';
+    $imageDisk = Storage::images();
+    if (isset($rec_d['image']) && $imageDisk->isExists('docs/' . $rec_d['image'])) {
+        $url = $upper_dir . '../lib/minigalnano/createthumb.php?filename=images/docs/'.urlencode($rec_d['image'] ?? '');
+        $str_input .= '<a href="' . $url . '&width=220" class="openPopUp notAJAX" title="' . __('Click to enlarge preview') . '">';
+        $str_input .= '<img src="' . $url .'&width=130" class="img-fluid rounded" alt="Image cover">';
         $str_input .= '</a>';
         $str_input .= '<a href="' . MWB . 'bibliography/index.php" postdata="removeImage=true&bimg=' . $itemID . '&img=' . ($rec_d['image'] ?? '') . '" loadcontainer="imageFilename" class="s-margin__bottom-1 mt-1 s-btn btn btn-danger btn-block makeHidden removeImage">' . __('Remove Image') . '</a>';
     } else {
@@ -994,7 +1052,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     $str_input .= '</div>';
     $str_input .= '</div>';
     $str_input .= '<div class="custom-file col-7">';
-    $str_input .= simbio_form_element::textField('file', 'image', '', 'class="custom-file-input" id="customFile"');
+    $str_input .= simbio_form_element::textField('file', 'image', '', 'class="custom-file-input" id="customFile"  accept="'.implode(',', $sysconf['allowed_images']).'"');
     $str_input .= '<label class="custom-file-label" for="customFile">' . __('Choose file') . '</label>';
     $str_input .= '<div style="padding: 10px;margin-left: -25px;">';
     $str_input .= '<div>' . __('Or download from url') . '</div>';
@@ -1043,56 +1101,22 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     // biblio file attachment
     // $str_input = '<div class="'.$visibility.'"><a class="notAJAX button" href="javascript: openHTMLpop(\''.MWB.'bibliography/pop_attach.php?biblioID='.$rec_d['biblio_id'].'\', 600, 300, \''.__('File Attachments').'\')">'.__('Add Attachment').'</a></div>';
     $str_input = '<div class="' . $visibility . ' s-margin__bottom-1"><a class="s-btn btn btn-default notAJAX openPopUp" href="' . MWB . 'bibliography/pop_attach.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '" width="780" height="500" title="' . __('File Attachments') . '">' . __('Add Attachment') . '</a></div>';
-    $str_input .= '<iframe name="attachIframe" id="attachIframe" class="form-control" style="width: 100%; height: 100px;" src="' . MWB . 'bibliography/iframe_attach.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
+    $str_input .= '<iframe name="attachIframe" id="attachIframe" class="form-control auto-resize-iframe" style="width: 100%; height: 100px; min-height: 80px; max-height: 250px;" src="' . MWB . 'bibliography/iframe_attach.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
     $form->addAnything(__('File Attachment'), $str_input);
 
     // biblio relation
     $str_input = '<div class="' . $visibility . ' s-margin__bottom-1"><a class="s-btn btn btn-default notAJAX openPopUp" href="' . MWB . 'bibliography/pop_biblio_rel.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '" title="' . __('Biblio Relation') . '">' . __('Add Relation') . '</a></div>';
-    $str_input .= '<iframe name="biblioIframe" id="biblioIframe" class="form-control" style="width: 100%; height: 100px;" src="' . MWB . 'bibliography/iframe_biblio_rel.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
+    $str_input .= '<iframe name="biblioIframe" id="biblioIframe" class="form-control auto-resize-iframe" style="width: 100%; height: 100px; min-height: 80px; max-height: 300px;" src="' . MWB . 'bibliography/iframe_biblio_rel.php?biblioID=' . ($rec_d['biblio_id'] ?? '') . '&block=1"></iframe>';
     $form->addAnything(__('Related Biblio Data'), $str_input);
 
     /**
      * Custom fields
      */
-    if (isset($biblio_custom_fields)) {
-        if (is_array($biblio_custom_fields) && $biblio_custom_fields) {
-            foreach ($biblio_custom_fields as $fid => $cfield) {
-
-                // custom field properties
-                $cf_dbfield = $cfield['dbfield'];
-                $cf_label = $cfield['label'];
-                $cf_default = $cfield['default'];
-                $cf_class = $cfield['class'] ?? '';
-                $cf_note = $cfield['note'] ?? '';
-                $cf_data = (isset($cfield['data']) && $cfield['data']) ? unserialize($cfield['data']) : array();
-
-                // get data field record
-                if (isset($rec_cust_d[$cf_dbfield]) && @unserialize($rec_cust_d[$cf_dbfield]) !== false) {
-                    $rec_cust_d[$cf_dbfield] = unserialize($rec_cust_d[$cf_dbfield]);
-                }
-
-                // custom field processing
-                if (in_array($cfield['type'], array('text', 'longtext', 'numeric'))) {
-                    $cf_max = isset($cfield['max']) ? $cfield['max'] : '200';
-                    $cf_width = isset($cfield['width']) ? $cfield['width'] : '50';
-                    $form->addTextField(($cfield['type'] == 'longtext') ? 'textarea' : 'text', $cf_dbfield, $cf_label, $rec_cust_d[$cf_dbfield] ?? $cf_default, ' class="form-control ' . $cf_class . '" style="width: ' . $cf_width . '%;" maxlength="' . $cf_max . '"', $cf_note);
-                } else if ($cfield['type'] == 'dropdown') {
-                    $form->addSelectList($cf_dbfield, $cf_label, $cf_data, $rec_cust_d[$cf_dbfield] ?? $cf_default, ' class="form-control ' . $cf_class . '"');
-                } else if ($cfield['type'] == 'checklist') {
-                    $form->addCheckBox($cf_dbfield, $cf_label, $cf_data, $rec_cust_d[$cf_dbfield] ?? $cf_default, ' class="form-control ' . $cf_class . '"');
-                } else if ($cfield['type'] == 'choice') {
-                    $form->addRadio($cf_dbfield, $cf_label, $cf_data, $rec_cust_d[$cf_dbfield] ?? $cf_default, ' class="form-control ' . $cf_class . '"');
-                } else if ($cfield['type'] == 'date') {
-                    $form->addDateField($cf_dbfield, $cf_label, $rec_cust_d[$cf_dbfield] ?? NULL, ' class="form-control ' . $cf_class . '"');
-                }
-                unset($cf_data);
-            }
-        }
-    }
+    $form->loadCustomField('biblio', 'biblio_id', $itemID);
     
     // get advance custom field based on plugin
     $js = '';
-    Plugins::getInstance()->execute(Plugins::BIBLIOGRAPHY_CUSTOM_FIELD_FORM, ['form' => $form, 'js' => &$js]);
+    Plugins::getInstance()->execute(Plugins::BIBLIOGRAPHY_CUSTOM_FIELD_FORM, ['form' => $form, 'js' => &$js, 'data' => $rec_cust_d ?? []]);
 
     // biblio hide from opac
     $hide_options[] = array('0', __('Show'));
@@ -1221,6 +1245,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     </script>
     <?php
 } else {
+    # CHECK ACCESS
+    if ($_SESSION['uid'] != 1) {
+        if (!utility::haveAccess('bibliography.bibliography-list')) {
+            die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
+        }
+    }
+
     # ADV LOG SYSTEM - STIIL EXPERIMENTAL
     $log = new AlLibrarian('1151', array("username" => $_SESSION['uname'], "uid" => $_SESSION['uid'], "realname" => $_SESSION['realname']));
 
@@ -1235,8 +1266,9 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     $datagrid = new simbio_datagrid();
 
     // index choice
-    if ($sysconf['index']['type'] == 'index' || $sysconf['index']['type'] == 'sphinx') {
-        if ($sysconf['index']['type'] == 'sphinx') {
+    $search_engine = Engine::active();
+    if ($search_engine != DefaultEngine::class) {
+        if ($search_engine == SphinxSearchEngine::class) {
             require LIB . 'sphinx/sphinxapi.php';
             require LIB . 'biblio_list_sphinx.inc.php';
         } else {
@@ -1249,6 +1281,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
         if ($can_read AND $can_write) {
             $datagrid->setSQLColumn('index.biblio_id', 'index.title AS \'' . __('Title') . '\'', 'index.labels', 'index.image',
                 'index.author',
+                'index.edition AS \'' . __('Edition') . '\'',
                 'index.isbn_issn AS \'' . __('ISBN/ISSN') . '\'',
                 'IF(COUNT(item.item_id)>0, COUNT(item.item_id), \'<strong style="color: #f00;">' . __('None') . '</strong>\') AS \'' . __('Copies') . '\'',
                 'index.last_update AS \'' . __('Last Update') . '\'');
@@ -1336,6 +1369,9 @@ if (isset($_GET['action']) && $_GET['action'] == 'history') {
     // set delete proccess URL
     $datagrid->chbox_form_URL = $_SERVER['PHP_SELF'];
     $datagrid->debug = true;
+
+    // execute registered hook
+    Plugins::run(Plugins::BIBLIOGRAPHY_BEFORE_DATAGRID_OUTPUT);
 
     // put the result into variables
     $datagrid_result = $datagrid->createDataGrid($dbs, $table_spec, $biblio_result_num, ($can_read AND $can_write));

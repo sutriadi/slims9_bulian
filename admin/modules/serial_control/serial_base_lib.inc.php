@@ -133,7 +133,7 @@ class serial
         <script type="text/javascript">
         function confirmProcess(int_serial_id, int_kardex_id)
         {
-            var confirmBox = confirm('<?php echo addslashes(__('Are you sure to remove selected Kardex data?'));?>' + "\n" + '<?php echo addslashes(__('Once deleted, it can\'t be restored!'));?>');
+            var confirmBox = confirm('<?php echo addslashes(__('Are you sure to remove selected Kardex data?'));?>' + "\n" + '<?php echo addslashes(__('Once deleted, it cannot be restored!'));?>');
             if (confirmBox) {
                 // set hidden element value
                 document.hiddenActionForm.serialID.value = int_serial_id;
@@ -229,7 +229,9 @@ class serial
     public function saveKardexes()
     {
         $_serialID = (integer)$_POST['serialID'];
-        // iterate trough dateExpected
+        $_curr_date = date('Y-m-d');
+
+        // iterate through dateExpected
         foreach ($_POST['dateExpected'] as $_kardexID => $_kardex_d) {
             $_date_expected = trim($this->obj_db->escape_string($_kardex_d));
             if (!$_date_expected) {
@@ -244,10 +246,10 @@ class serial
             $_notes = !empty($_notes)?'\''.$_notes.'\'':'NULL';
             // do update
             if ($_kardexID == 0) {
-                @$this->obj_db->query("INSERT INTO kardex (serial_id, date_expected, date_received, seq_number, notes) VALUES ($_serialID, '$_date_expected', $_date_received, $_seq_number, $_notes)");
+                @$this->obj_db->query("INSERT INTO kardex (serial_id, date_expected, date_received, seq_number, notes, input_date, last_update) VALUES ($_serialID, '$_date_expected', $_date_received, $_seq_number, $_notes, '$_curr_date', '$_curr_date')");
             } else {
                 @$this->obj_db->query("UPDATE kardex SET date_expected='$_date_expected',
-                    date_received=$_date_received, seq_number=$_seq_number, notes=$_notes WHERE kardex_id=$_kardexID AND serial_id=$_serialID");
+                    date_received=$_date_received, seq_number=$_seq_number, notes=$_notes, last_update='$_curr_date' WHERE kardex_id=$_kardexID AND serial_id=$_serialID");
             }
         }
     }
@@ -268,3 +270,4 @@ class serial
         return false;
     }
 }
+

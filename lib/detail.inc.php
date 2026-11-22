@@ -41,6 +41,7 @@ class detail
     private $error = false;
     private $output_format = 'html';
     private $template = 'html';
+    private $total_item_available = 0;
     protected $detail_prefix = '';
     protected $detail_suffix = '';
     public $record_title;
@@ -66,12 +67,12 @@ class detail
         $this->detail_id = $int_detail_id;
         $this->biblio = new Biblio($this->db, $int_detail_id);
         $this->record_detail = $this->biblio->detail();
-        $this->error = $this->biblio->getError();
+        $biblioError = $this->biblio->getError();
         if (isset($this->record_detail['title'])) {
           $this->record_title = $this->record_detail['title'];
           $this->notes = $this->record_detail['notes'];
           $this->subjects = $this->record_detail['subjects'];
-        } else if (!$this->error) {
+        } else if (!$biblioError) {
           $this->error = 'Data not found!';
         }
     }
@@ -92,7 +93,17 @@ class detail
     {
         global $sysconf;
         if ($this->error) {
-            return '<div class="error alert alert-error">Error Fetching data for record detail. Server return error message: '.$this->error.'</div>';
+            http_response_code(404);
+             $error = ucwords(__($this->error));
+             $detail = __('Maybe the data is temporary unvailable');
+             return <<<HTML
+             <div class="w-100 d-flex justify-content-center align-items-center" style="height: 50vh">
+                <h3>{$error}</h3>
+                <strong class="mx-3">|</strong>
+                <p>{$detail}</p>
+             </div>
+             HTML;
+            // return '<div class="error alert alert-error"> Server return error message: '.$this->error.'</div>';
         } else {
             if ($this->output_format == 'html') {
                 ob_start();
@@ -237,13 +248,14 @@ HTML;
         $loan_stat_q = $this->db->query('SELECT due_date FROM loan AS l
             LEFT JOIN item AS i ON l.item_code=i.item_code
             WHERE l.item_code=\''.$copy_d['item_code'].'\' AND is_lent=1 AND is_return=0');
-        
+
         if ($loan_stat_q->num_rows > 0) {
             $loan_stat_d = $loan_stat_q->fetch_row();
             list($avail_class, $avail_status) = ['item-onloan', __('Currently On Loan (Due on ').date($sysconf['date_format'], strtotime($loan_stat_d[0])).')'];
         } else if ($copy_d['no_loan']) {
             list($avail_class, $avail_status) = ['item-notforloan', __('Available but not for loan').' - '.$copy_d['item_status_name']];
         } else {
+            $this->total_item_available++;
             list($avail_class, $avail_status) = ['item-available', __('Available').(trim($copy_d['item_status_name']??'')?' - '.$copy_d['item_status_name']:'')];
         }
 
@@ -340,46 +352,61 @@ HTML;
       if (file_exists(MDLBS.'bibliography/custom_fields.inc.php')) {
         include MDLBS.'bibliography/custom_fields.inc.php';
       }
+
       $columns = '';
+      $public_fields = array();
+
       if (isset($biblio_custom_fields)) {
         foreach ($biblio_custom_fields as $custom_field) {
-          if (isset($custom_field['is_public']) && $custom_field['is_public'] == '1')
+          if (isset($custom_field['is_public']) && $custom_field['is_public'] == '1') {
             $columns .= $custom_field['dbfield'] . ', ';
+            $public_fields[$custom_field['dbfield']] = $custom_field;
+          }
         }
-        if ($columns !== '') {
-          $columns = substr($columns, 0, -2);
+
+        if ($columns === '') {
+          return $_return;
         }
+
+        $columns = substr($columns, 0, -2);
       } else {
-        $columns = '*';
+        return $_return;
       }
 
       $query = $this->db->query(sprintf("SELECT %s FROM biblio_custom WHERE biblio_id=%d", $columns, $this->detail_id));
+
       if ($query) {
         $data = $query->fetch_assoc();
-        if (isset($biblio_custom_fields)) {
-          foreach ($biblio_custom_fields as $custom_field) {
-            if (isset($custom_field['is_public']) && $custom_field['is_public'] == '1' && isset($data[$custom_field['dbfield']])) {
-
+        if ($data) {
+          foreach ($public_fields as $custom_field) {
+            $dbfield = $custom_field['dbfield'];
+            if (isset($data[$dbfield])) {
               $data_field = unserialize($custom_field['data']??'');
-              $data_record  = $data[$custom_field['dbfield']];
+              if (!is_array($data_field)) $data_field = [];
+              $data_record  = $data[$dbfield];
+              $arr = [];
+              $value = '';
 
               switch ($custom_field['type']) {
                 case 'dropdown':
                 case 'choice':
-                  $value = end($data_field[$data_record]);
+                  $temp_array = $data_field[$data_record] ?? [];
+                  $value = end($temp_array);
                   break;
                 case 'checklist':
                   $data_record = unserialize($data_record);
-                  foreach ($data_record as $key => $val) {
-                    if(isset($data_field[$val])){
-                    $arr[] = end($data_field[$val]);
+                  if (is_array($data_record)) {
+                    foreach ($data_record as $key => $val) {
+                      if(isset($data_field[$val])){
+                        $temp_array = $data_field[$val] ?? [];
+                        $arr[] = end($temp_array);
+                      }
                     }
                   }
-                  // convert array to string
                   $value = implode(' -- ',$arr);
                   break;
                 default:
-                  $value = $data[$custom_field['dbfield']];
+                  $value = $data[$dbfield];
                   break;
               }
 
@@ -437,20 +464,6 @@ HTML;
         $this->metadata .= '<meta name="Edition" content="'.$this->record_detail['edition'].'" />';
         $this->metadata .= '<meta name="Call Number" content="'.$this->record_detail['call_number'].'" />';
 
-        // check image
-        if (!empty($this->record_detail['image'])) {
-          if ($sysconf['tg']['type'] == 'minigalnano') {
-            $this->record_detail['image_src'] = 'lib/minigalnano/createthumb.php?filename=images/docs/'.urlencode($this->record_detail['image']).'&amp;width=200';
-            $this->record_detail['image'] = '<img loading="lazy" itemprop="image" alt="'.sprintf('Image of %s', $this->record_title).'" src="./'.$this->record_detail['image_src'].'" border="0" alt="'.$this->record_detail['title'].'" />';
-          }
-        } else {
-          $this->record_detail['image_src'] = "images/default/image.png";
-          $this->record_detail['image'] = '<img src="./'.$this->record_detail['image_src'].'" alt="No image available for this title" border="0" alt="'.$this->record_detail['title'].'" />';
-        }
-
-        // get image source
-        $this->image_src = $this->record_detail['image_src'];
-
         // get the authors data
         $authors = '';
         $data = array();
@@ -478,6 +491,21 @@ HTML;
         $this->record_detail['file_att'] = $this->getAttachments();
         $this->record_detail['related'] = $this->getRelatedBiblio();
         $this->record_detail['biblio_custom'] = $this->getBiblioCustom();
+
+        // check image
+        if (!empty($this->record_detail['image'])) {
+          if ($sysconf['tg']['type'] == 'minigalnano') {
+            $isItemAvailable = $this->total_item_available > 0;
+            $this->record_detail['image_src'] = 'lib/minigalnano/createthumb.php?filename=images/docs/'.urlencode($this->record_detail['image']).'&amp;width=200';
+            $this->record_detail['image'] = '<img class="' . ($isItemAvailable ? 'available' : 'not-available') . '" title="' . ($isItemAvailable ? $this->record_title : __('Items is not available')) . '" loading="lazy" itemprop="image" alt="'.sprintf('Image of %s', $this->record_title).'" src="./'.$this->record_detail['image_src'].'" border="0" alt="'.$this->record_detail['title'].'" />';
+          }
+        } else {
+          $this->record_detail['image_src'] = "images/default/image.png";
+          $this->record_detail['image'] = '<img src="./'.$this->record_detail['image_src'].'" alt="No image available for this title" border="0" alt="'.$this->record_detail['title'].'" />';
+        }
+
+        // get image source
+        $this->image_src = $this->record_detail['image_src'];
 
         if ($sysconf['social_shares']) {
         // share buttons
@@ -1028,7 +1056,7 @@ HTML;
           LEFT JOIN files AS f ON att.file_id=f.file_id WHERE att.biblio_id='.$this->detail_id.' AND att.access_type=\'public\' LIMIT 20');
       if ($attachment_q->num_rows > 0) {
         while ($attachment_d = $attachment_q->fetch_assoc()) {
-            $_xml_output .= '<dc:relation><![CDATA[';
+            // $_xml_output .= '<dc:relation><![CDATA[';
             // check member type privileges
             if ($attachment_d['access_limit']) { continue; }
             $jsonld['associatedMedia']['name'] = trim($attachment_d['file_title']);
@@ -1060,6 +1088,11 @@ HTML;
     public function getSuffix()
     {
         return $this->detail_suffix;
+    }
+
+    public function getError()
+    {
+        return $this->error;
     }
 
     private function xmlWrite(&$xmlwriter, $data, $mode = 'Text') {

@@ -45,12 +45,12 @@ if (isset($_POST['resync'])) {
             LEFT JOIN biblio AS b ON i.biblio_id=b.biblio_id
                 LEFT JOIN mst_gmd AS g ON b.gmd_id=g.gmd_id
         SET sti.title=b.title, sti.gmd_name=g.gmd_name,
-            sti.classification=b.classification, sti.call_number=b.call_number,
+            sti.classification=b.classification, sti.call_number=i.call_number,
             sti.coll_type_name=ct.coll_type_name');
     if (!$dbs->error) {
         $aff_rows = $dbs->affected_rows;
         // record to log
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'stock_take', 'Stock Take Re-Synchronization', 'Re-Sync', 'OK');
+        writeLog('staff', $_SESSION['uid'], 'stock_take', 'Stock Take Re-Synchronization', 'Re-Sync', 'OK');
         echo '<script type="text/javascript">'."\n";
         echo 'parent.$(\'#resyncInfo\').html(\''.$aff_rows.' Stock Take\\\'s Item Data Successfully Synchronized!\');'."\n";
         echo 'parent.$(\'#resyncInfo\').css( {\'display\': \'block\'} );'."\n";

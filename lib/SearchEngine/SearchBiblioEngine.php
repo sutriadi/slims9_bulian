@@ -518,10 +518,11 @@ class SearchBiblioEngine extends Contract
 
     function toHTML()
     {
+        global $sysconf;
         $buffer = '';
         // include biblio list html template callback
-        $path = SB . config('template.dir', 'template') . DS;
-        $path .= config('template.theme', 'default') . DS . 'biblio_list_template.php';
+        $path = SB . config('template.dir', $sysconf['template']['dir']) . DS;
+        $path .= config('template.theme', $sysconf['template']['theme']) . DS . 'biblio_list_template.php';
         include $path;
 
         foreach ($this->documents as $i => $document) {
@@ -682,6 +683,16 @@ class SearchBiblioEngine extends Contract
 
     function dump(array $sql)
     {
-        debug('Engine ⚙️ : ' . get_class($this), "SQL ⚒️", $sql, "Bind Value ⚒️", $this->execute);
+        if (!isset($_GET['resultXML'])) {
+            debugBox(content: function() use($sql) {
+                debug('Search Engine Debug 🔎 🪲', [
+                    'Engine Type ⚙️:', get_class($this)
+                ], [
+                    'SQL ⚙️:', $sql
+                ], [
+                    'Bind Value ⚒️:', $this->execute
+                ]);
+            });
+        }
     }
 }

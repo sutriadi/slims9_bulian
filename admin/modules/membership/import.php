@@ -18,6 +18,14 @@
  *
  */
 
+/* Biblio Import section */
+use SLiMS\Filesystems\Storage;
+use SLiMS\DB;
+use SLiMS\Csv\Writer;
+use SLiMS\Csv\Reader;
+use SLiMS\Csv\Row;
+use SLiMS\Debug\VarDumper;
+
 /* Member Import section */
 
 // key to authenticate
@@ -37,6 +45,7 @@ require SB.'admin/default/session_check.inc.php';
 require SIMBIO.'simbio_GUI/form_maker/simbio_form_table_AJAX.inc.php';
 require SIMBIO.'simbio_GUI/table/simbio_table.inc.php';
 require SIMBIO.'simbio_FILE/simbio_file_upload.inc.php';
+require MDLBS . '/bibliography/biblio_utils.inc.php';
 
 // privileges checking
 $can_read = utility::havePrivilege('membership', 'r');
@@ -46,75 +55,179 @@ if (!$can_read) {
     die('<div class="errorBox">'.__('You don\'t have enough privileges to access this area!').'</div>');
 }
 
+if (isset($_GET['action']) && $_GET['action'] === 'download_sample')
+{
+  // Create Csv instance
+  $csv = new Writer;
+  $csv->add(new Row([
+    'member_id','member_name','gender','member_type_name',
+    'member_email','member_address','postal_code',
+    'inst_name','is_new','member_image','pin','member_phone',
+    'member_fax','member_since_date','register_date','expire_date',
+    'birth_date','member_notes','mpasswd'
+  ]));
+
+  // Download CSV
+  $csv->download('member_sample_import');
+}
+
+
 // max chars in line for file operations
 $max_chars = 4096;
 
 if (isset($_POST['doImport'])) {
+    if ( empty($_FILES['importFile']['name']) && !isset($_SESSION['csv']['name']) ) {
+        utility::jsToastr(__('Import Tool'), __('No CSV file selected to import, please choose CSV file first!'), 'error');
+        exit();        
+    }
+
+    // create upload object
+    $files_disk = Storage::files();
+    
     // check for form validity
-    if (!$_FILES['importFile']['name']) {
-        utility::jsAlert(__('Please select the file to import!'));
-        exit();
-    } else if (empty($_POST['fieldSep']) OR empty($_POST['fieldEnc'])) {
-        utility::jsAlert(__('Required fields (*)  must be filled correctly!'));
-        exit();
-    } else {
-        // set PHP time limit
-        set_time_limit(7200);
-        // set ob implicit flush
-        ob_implicit_flush();
-        // create upload object
-        $upload = new simbio_file_upload();
-        // get system temporary directory location
-        $temp_dir = sys_get_temp_dir();
-        // set max size
-        $max_size = $sysconf['max_upload']*1024;
-        $upload->setAllowableFormat(array('.csv'));
-        $upload->setMaxSize($max_size);
-        $upload->setUploadDir($temp_dir);
-        $upload_status = $upload->doUpload('importFile');
-        if ($upload_status != UPLOAD_SUCCESS) {
-            utility::jsAlert(__('Upload failed! File type not allowed or the size is more than').' '.($sysconf['max_upload']/1024).' MB'); //mfc
+    if (!isset($_POST['process'])) {
+
+        if (empty($_POST['fieldSep']) OR empty($_POST['fieldEnc'])) {
+            utility::jsToastr(__('Import Tool'), __('Required fields (*)  must be filled correctly!'), 'error');
             exit();
         }
-        // uploaded file path
-        $uploaded_file = $temp_dir.DS.$_FILES['importFile']['name'];
+
+        // get system temporary directory location
+        $_SESSION['csv'] = [];
+        $_SESSION['csv']['header'] = false;
+        $_SESSION['csv']['name'] = md5($_FILES['importFile']['name'] . date('this'));
+        
+        if (!$files_disk->isExists('temp')) $files_disk->makeDirectory('temp');
+
+        if ($files_disk->isExists('temp' . DS . $_SESSION['csv']['name'])) {
+            $files_disk->delete('temp' . DS . $_SESSION['csv']['name']);
+        }
+        
+        // set csv format
+        $_SESSION['csv']['format'] = [
+            'recordNum' => intval($_POST['recordNum']),
+            'fieldEnc' => trim($_POST['fieldEnc']),
+            'fieldSep' => trim($_POST['fieldSep']),
+            'recordOffset' => intval($_POST['recordOffset'])
+        ];
+
+        $_SESSION['csv']['section'] = 'membership';
+        $_SESSION['csv']['action'] = $_SERVER['PHP_SELF'];
+        $_SESSION['csv']['password'] = (int)($_POST['password'][0]??0);
+        if (isset($_POST['header'])) $_SESSION['csv']['header'] = true;
+
+        // create upload object
+        $csv_upload = $files_disk->upload('importFile', function($files) use($sysconf) {
+            // Extension check
+            $files->isExtensionAllowed(['.csv']);
+
+            // File size check
+            $files->isLimitExceeded($sysconf['max_upload']*1024);
+
+            // destroy it if failed
+            if (!empty($files->getError())) $files->destroyIfFailed();
+
+        })->as('temp' . DS . $_SESSION['csv']['name']);
+        
+        if (!$csv_upload->getUploadStatus())
+        {
+            toastr(__('Upload failed! File type not allowed or the size is more than').($sysconf['max_upload']/1024).' MB')->error(__('Import Tool'));
+            exit;
+        }
+
+        // Redirect content
+        redirect()->simbioAJAX(MWB . 'bibliography/import_preview.php');
+    } else {
         $row_count = 0;
         // check for import setting
-        $record_num = intval($_POST['recordNum']);
-        $field_enc = trim($_POST['fieldEnc']);
-        $field_sep = trim($_POST['fieldSep']);
-        $record_offset = intval($_POST['recordOffset']);
+        $record_num = intval($_SESSION['csv']['format']['recordNum']);
+        $field_enc = trim($_SESSION['csv']['format']['fieldEnc']);
+        $field_sep = trim($_SESSION['csv']['format']['fieldSep']);
+        $record_offset = intval($_SESSION['csv']['format']['recordOffset']);
         $record_offset = $record_offset-1;
         // get current datetime
+        $start_time = time();
         $curr_datetime = date('Y-m-d H:i:s');
         $curr_datetime = '\''.$curr_datetime.'\'';
         // foreign key id cache
         $mtype_id_cache = array();
         // read file line by line
         $inserted_row = 0;
-        $file = fopen($uploaded_file, 'r');
+        $csv = 'temp' . DS . $_SESSION['csv']['name'] . '.csv';
+        $file = $files_disk->readStream($csv);
+        $fileNumber = $files_disk->readStream($csv);
         $n = 0;
-        while (!feof($file)) {
-            // record count
-            if ($record_num > 0 AND $row_count == $record_num) {
-                break;
-            }
-            // go to offset
-            if ($row_count < $record_offset) {
-                // pass and continue to next loop
-                $row = fgets($file, $max_chars);
-                $row_count++;
-                continue;
-            } else {
+
+        // get total line
+        $lineNumber = 0;
+        while (!feof($fileNumber)) {
+            $line = fgets($fileNumber, $max_chars);
+            if (empty($line)) continue;
+            $lineNumber++;
+        }
+
+        try {
+            $pdo = DB::getInstance();
+            $state = $pdo->prepare(<<<SQL
+                INSERT IGNORE INTO member
+                    (member_id, member_name, gender, 
+                    member_type_id, member_email, member_address, 
+                    postal_code, inst_name, is_new, member_image, 
+                    pin, member_phone, member_fax, 
+                    member_since_date, register_date, 
+                    expire_date, birth_date, member_notes, mpasswd,
+                    input_date, last_update)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                    now(),now());
+            SQL);
+
+            while (!feof($file)) {
+                // record count
+                if ($record_num > 0 AND $row_count == $record_num) {
+                    break;
+                }
+                // skip first line if it is column header
+                if ($_SESSION['csv']['header'] && $row_count == 0) {
+                    // pass and continue to next loop
+                    $field = fgetcsv($file, $max_chars, $field_sep, $field_enc);
+                    $_SESSION['csv']['header'] = false;
+                    continue;
+                }
+                // go to offset
+                if ($row_count < $record_offset) {
+                    // pass and continue to next loop
+                    $field = fgetcsv($file, $max_chars, $field_sep, $field_enc);
+                    $row_count++;
+                    continue;
+                }
+
                 // get an array of field
                 $field = fgetcsv($file, $max_chars, $field_sep, $field_enc);
-                var_dump($field);
                 if ($field) {
+                    // pre-process some fields
+                    $field[3] = utility::getID($dbs, 'mst_member_type', 'member_type_id', 'member_type_name', $field[3], $mtype_id_cache);
+                    $field[17] = ( isset($field[18]) && !empty($field[17]) ) ? $field[17] : null;
+                    
+                    // if last field is password field, hash it
+                    $withPassword = isset($_SESSION['csv']['password']) && $_SESSION['csv']['password'] == 1;
+                    $isPasswordValid = isset($field[18]) && !empty($field[18]);
+                    $field[18] = ($withPassword && $isPasswordValid) ? password_hash($field[18], PASSWORD_BCRYPT) : null;
+                    
+                    // remove extra fields
+                    array_splice($field, 19, 10);
+
+                    // echo "<pre>".print_r($field, true)."<pre>"; die();
+
+                    $state->execute($field);
+
+                    /* process fields
+
                     // strip escape chars from all fields
                     foreach ($field as $idx => $value) {
                         $field[$idx] = str_replace('\\', '', trim($value));
                         $field[$idx] = $dbs->escape_string($field[$idx]);
                     }
+
                     // strip leading field encloser if any
                     $member_id = preg_replace('@^\\\s*'.$field_enc.'@i', '', $field[0]);
                     $member_id = '\''.$member_id.'\'';
@@ -136,47 +249,82 @@ if (isset($_POST['doImport'])) {
                     $birth_date = $field[16]?'\''.$field[16].'\'':'NULL';
                     $member_notes = preg_replace('@\\\s*'.$field_enc.'$@i', '', $field[17]);
                     $member_notes = $member_notes?'\''.$member_notes.'\'':'NULL';
-                    // sql insert string
+                    // Password column
+                    $lastKey = array_key_last($field);
+                    $withPassword = isset($_SESSION['csv']['password']) && $_SESSION['csv']['password'] == 1;
+                    $isPasswordValid = isset($field[$lastKey]) && !empty($field[$lastKey]);
+                    $mpasswd = $withPassword && $isPasswordValid ? '\'' . password_hash($field[$lastKey], PASSWORD_BCRYPT) . '\'' : 'NULL';
+
                     $sql_str = "INSERT IGNORE INTO member
                         (member_id, member_name, gender,
                         member_type_id, member_email, member_address, postal_code,
                         inst_name, is_new, member_image, pin, member_phone,
                         member_fax, member_since_date, register_date,
                         expire_date, birth_date, member_notes,
-                        input_date, last_update)
+                        input_date, last_update,mpasswd)
                             VALUES ($member_id, $member_name, $gender,
                             $member_type_id, $member_email, $member_address, $postal_code,
                             $inst_name, $is_new,
                             $member_image, $pin, $member_phone,
                             $member_fax, $member_since_date, $register_date,
                             $expire_date, $birth_date, $member_notes,
-                            $curr_datetime, $curr_datetime)";
-
-                    // first field is header
-                    if (isset($_POST['header']) && $n < 1) {
-                      $n++;
+                            $curr_datetime, $curr_datetime, $mpasswd)";
+    
+                    // send query
+                    @$dbs->query($sql_str);
+                    
+                    
+                    if (!$dbs->error) {
+                      $inserted_row++;
                     } else {
-                      // send query
-                      @$dbs->query($sql_str);
-                      if (!$dbs->error) {
-                        $inserted_row++;
-                      } else {
-                        echo $sql_str.'<br />';
-                        echo $dbs->error.'<hr />';
-                      }
+                      throw new Exception($dbs->error . ' with query : ' . $sql_str);
+                    }
+                    */
+                    if ($state) {
+                        VarDumper::dump(
+                            str_replace('{member}', $field[1]??'?', __('Success importing member data : {member}'))
+                        );
+
+                        $row_count++;
+                        importProgress(round($row_count/$lineNumber * 100));
+                        usleep(2500);
                     }
                 }
-                $row_count++;
             }
+        } catch (Exception $e) {
+            // Reset session
+            unset($_SESSION['csv']);
+            $errorMessage = $e->getMessage();
+            toastr($errorMessage)->error();
+            exit(<<<HTML
+            <script>
+            parent.\$('.infoBox').html('{$errorMessage}')
+            parent.\$('.infoBox').addClass('errorBox');
+            parent.\$('.infoBox').removeClass('infoBox');
+            </script>
+            HTML);
         }
-        // close file handle
-        fclose($file);
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'membership', 'Importing '.$inserted_row.' members data from file : '.$_FILES['importFile']['name'], 'Import', 'Add');
-        echo '<script type="text/javascript">'."\n";
-        echo 'parent.$(\'#importInfo\').html(\'<strong>'.$inserted_row.'</strong> '.__('records inserted successfully to members database, from record').' <strong>'.$_POST['recordOffset'].'</strong>\');'."\n"; //mfc
-        echo 'parent.$(\'#importInfo\').css( {\'display\': \'block\'} );'."\n";
-        echo '</script>';
-        exit();
+
+        // set information variable before reset csv session
+        $redirectTo = $_SESSION['csv']['action'];
+        $fileName = $_SESSION['csv']['name'];
+
+        // delete temp file
+        $files_disk->delete('temp' . DS . $fileName . '.csv');
+
+        // Reset session
+        unset($_SESSION['csv']);
+
+        $end_time = time();
+        $import_time_sec = $end_time-$start_time;
+        writeLog('staff', $_SESSION['uid'], 'membership', 'Importing '.$inserted_row.' members data from file : '.$fileName, 'Import', 'Add');
+        $label = str_replace(['{row_count}','{time_to_finish}'], [$inserted_row, $import_time_sec], __('Success imported <strong>{row_count}</strong> title in <strong>{time_to_finish}</strong> second'));
+        exit(<<<HTML
+        <script>
+        parent.\$('.infoBox').html('{$label}')
+        setTimeout(() => parent.\$('#mainContent').simbioAJAX('{$redirectTo}'), 2500)
+        </script>
+        HTML);
     }
 }
 
@@ -186,8 +334,14 @@ if (isset($_POST['doImport'])) {
     <div class="per_title">
     	<h2><?php echo __('Import Data'); ?></h2>
     </div>
+    <div class="sub_section">
+	    <div class="btn-group">
+            <a href="<?php echo MWB; ?>membership/index.php" class="btn btn-default"><?php echo __('Member List'); ?></a>
+        </div>
+    </div>
     <div class="infoBox">
     <?php echo __('Import for members data from CSV file'); ?>
+    &nbsp;<a href="<?= $_SERVER['PHP_SELF'] ?>?action=download_sample" class="s-btn btn btn-secondary notAJAX"><?= __('Download Sample') ?></a>
 	</div>
 </div>
 </div>
@@ -196,7 +350,7 @@ if (isset($_POST['doImport'])) {
 
 // create new instance
 $form = new simbio_form_table_AJAX('mainForm', $_SERVER['PHP_SELF'].'', 'post');
-$form->submit_button_attr = 'name="doImport" value="'.__('Import Now').'" class="s-btn btn btn-primary"';
+$form->submit_button_attr = 'name="doImport" value="'.__('Process').'" class="s-btn btn btn-primary"';
 
 // form table attributes
 $form->table_attr = 'id="dataList" class="s-table table"';
@@ -208,7 +362,7 @@ $form->table_content_attr = 'class="alterCell2"';
 $str_input  = '<div class="container-fluid">';
 $str_input .= '<div class="row">';
 $str_input .= '<div class="custom-file col-6">';
-$str_input .= simbio_form_element::textField('file', 'importFile','','class="custom-file-input"');
+$str_input .= simbio_form_element::textField('file', 'importFile','','class="custom-file-input" accept=".csv" required');
 $str_input .= '<label class="custom-file-label" for="customFile">Choose file</label>';
 $str_input .= '</div>';
 $str_input .= '<div class="col">';
@@ -227,6 +381,8 @@ $form->addTextField('text', 'recordNum', __('Number of Records To Export (0 for 
 $form->addTextField('text', 'recordOffset', __('Start From Record'), '1', 'style="width: 10%;" class="form-control"');
 // header (column name)
 $form->addCheckBox('header', __('The first row is columns names'), array( array('1', __('Yes')) ), '');
+// password (last column)
+$form->addCheckBox('password', __('The last column is password'), array( array('1', __('Yes')) ), '');
 // output the form
 echo $form->printOut();
 ?>

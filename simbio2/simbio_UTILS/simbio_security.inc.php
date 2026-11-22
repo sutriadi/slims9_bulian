@@ -75,6 +75,29 @@ class simbio_security
         // destroy all session
         $_SESSION = null;
         session_destroy();
+
+        /**
+         * Check request content-type
+         */
+        // From getallhreaders()
+        $contentType = isset(getallheaders()['Content-Type']) && getallheaders()['Content-Type'] == 'application/json';
+        $accept = isset(getallheaders()['Accept']) && getallheaders()['Accept'] == 'application/json';
+
+        // from $_SERVER
+        $serverContentType = isset($_SERVER['CONTENT_TYPE']) && $_SERVER['CONTENT_TYPE'] == 'application/json';
+
+        // from $_GET
+        $queryFormat = isset($_GET['format']) && $_GET['format'] == 'json';
+
+        // From $_POST
+        if (count($_POST) === 0) $_POST = json_decode(file_get_contents('php://input'), TRUE);
+        $postJson = isset($_POST['format']) && $_POST['format'] == 'json';
+
+        $isJson = $contentType || $accept || $serverContentType || $queryFormat || $postJson;
+
+        // bring back response
+        if ($isJson) die(\SLiMS\Json::stringify(['status' => false, 'message' => __('Your Login session has timed out.'), 'code' => 401])->withHeader());
+
         if ($bool_die === true) {
             // shutdown current script
             die($str_msg);
@@ -86,13 +109,103 @@ class simbio_security
 
     /**
      * Static method to clean all string character
-     * from html element and attributes
      *
-     * @param string $str_char
+     * @param string|array $str_char
      * @return string
      */
-    public static function xssFree($str_char)
+    public static function xssFree(string|array $char)
     {
-        return str_replace(['\'', '"'], '', strip_tags($str_char));
+        $formatter = fn($chr) => str_replace(['\'', '"'], '', strip_tags($chr));
+
+        if (is_string($char)) return $formatter($char);
+
+        foreach ($char as $key => $value) {
+            if (is_string($value)) $char[$key] = $formatter($value);
+            else if (is_array($value)) $char[$key] = self::xssFree($value);
+        }
+
+        return $char;
+    }
+
+    /**
+     * Static method to validate password string
+     * from html element and attributes
+     *
+     * @param   string    $password
+     * @param   int       $min_length
+     * @return  boolean
+     */
+    public static function validatePassword($password, $min_length = 8) {
+        // Check if the password is at least 8 characters long
+        if (strlen($password) < $min_length) {
+            return false;
+        }
+
+        // Check for at least one uppercase letter
+        if (!preg_match('/[A-Z]/', $password)) {
+            return false;
+        }
+
+        // Check for at least one number
+        if (!preg_match('/[0-9]/', $password)) {
+            return false;
+        }
+
+        // Check for at least one non-alphanumeric character
+        if (!preg_match('/[^a-zA-Z0-9]/', $password)) {
+            return false;
+        }
+
+        // If all checks pass, return true
+        return true;
+    }
+
+    /**
+     * Static method to validate password string
+     * from html element and attributes
+     *
+     * @param   string    $password
+     * @param   int       $min_length
+     * @return  boolean
+     */
+    public static function validatePasswordFunctionJS($min_length = 8, $include_script_tag = true) {
+        ob_start();
+        ?>
+        <?php if ($include_script_tag) : ?><script type="text/javascript"><?php endif; ?>
+        function validatePassword(password, min_length = <?= $min_length ?>) {
+            // Check if the password length
+            if (password.length < min_length) {
+                return false;
+            }
+            // Check for at least one uppercase letter
+            if (!/[A-Z]/.test(password)) {
+                return false;
+            }
+            // Check for at least one number
+            if (!/[0-9]/.test(password)) {
+                return false;
+            }
+            // Check for at least one non-alphanumeric character
+            if (!/[^a-zA-Z0-9]/.test(password)) {
+                return false;
+            }
+            return true;
+        }
+
+        function comparePassword(form_name = '#mainForm', password1 = '#passwd1', password2 = '#passwd2', min_password_length = 8) {
+            jQuery(form_name).on('submit', function(event) {
+                let p1 = jQuery(password1).val();
+                let p2 = jQuery(password2).val();
+                if (p1.length > 0 && p2.length > 0) {
+                    if ( !validatePassword(p2, min_password_length) ) {
+                        event.preventDefault();
+                        alert('Password must be at least ' + min_password_length + ' characters long and must contain one uppercase letter, one number, and one special character.');
+                    }
+                }
+            });
+        }
+        <?php if ($include_script_tag) : ?></script><?php endif; ?>
+        <?php
+        return ob_get_clean();
     }
 }

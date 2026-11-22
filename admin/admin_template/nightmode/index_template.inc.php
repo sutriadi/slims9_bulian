@@ -11,10 +11,11 @@
     <meta http-equiv="Expires" content="Sat, 26 Jul 1997 05:00:00 GMT" />
 
     <?php
+    $imagesDisk = \SLiMS\Filesystems\Storage::images();
     $icon = SWB . 'webicon.ico';
-    if (isset($sysconf['webicon']) && !empty($sysconf['webicon']) && file_exists(SB . 'images/default/' . $sysconf['webicon']))
+    if (isset($sysconf['webicon']) && !empty($sysconf['webicon']) && $imagesDisk->isExists($path = 'default/' . $sysconf['webicon']))
     {
-        $icon = SWB . 'images/default/' . $sysconf['webicon'];
+        $icon = SWB . 'lib/minigalnano/createthumb.php?filename=images/' . $path . '&width=130';
     }
     ?>
 
@@ -27,7 +28,8 @@
     <link href="<?php echo JWB; ?>toastr/toastr.min.css?<?php echo date('this') ?>" rel="stylesheet" type="text/css" />
     <link href="<?php echo JWB; ?>jquery.imgareaselect/css/imgareaselect-default.css" rel="stylesheet" type="text/css" />
     <link href="<?php echo JWB; ?>datepicker/css/datepicker-bs4.min.css" rel="stylesheet" />
-    <link href="<?php echo $sysconf['admin_template']['css'].'?'.date('this'); ?>" rel="stylesheet" type="text/css" />
+    <link href="<?php echo $sysconf['admin_template']['css'].'?v='.date('this'); ?>" rel="stylesheet" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="<?php echo JWB; ?>/croppie/croppie.css"/>
 
     <script type="text/javascript" src="<?php echo JWB; ?>jquery.js"></script>
     <script type="text/javascript" src="<?php echo AWB; ?>admin_template/<?php echo $sysconf['admin_template']['theme']?>/vendor/slimscroll/jquery.slimscroll.min.js"></script>
@@ -47,6 +49,7 @@
     <script type="text/javascript" src="<?php echo SWB; ?>js/popper.min.js"></script>
     <script type="text/javascript" src="<?php echo JWB; ?>toastr/toastr.min.js"></script>
     <script type="text/javascript" src="<?php echo JWB; ?>datepicker/js/datepicker-full.min.js"></script>
+    <script type="text/javascript" src="<?php echo JWB; ?>/croppie/croppie.js"></script>
     <?php if (file_exists(SB . 'js/datepicker/js/locales/' . substr($sysconf['default_lang'], 0,2) . '.js')): ?>
     <script type="text/javascript" src="<?php echo JWB; ?>datepicker/js/locales/<?= substr($sysconf['default_lang'], 0,2) ?>.js"></script>
     <?php endif; ?>

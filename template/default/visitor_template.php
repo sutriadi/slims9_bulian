@@ -112,7 +112,9 @@ if (isset($_GET['select_lang'])) {
                 textInfo: '',
                 image: './images/persons/photo.png',
                 quotes: {},
-                timeout: null
+                timeout: null,
+                csrfName: '<?= \Volnix\CSRF\CSRF::getTokenName() ?>',
+                csrfToken: '<?= \Volnix\CSRF\CSRF::getToken() ?>'
             }
         },
         mounted() {
@@ -125,7 +127,7 @@ if (isset($_GET['select_lang'])) {
             },
             getQuotes: function() {
                 // Alternative Free Quotes API: https://api.quotable.io/random
-                axios.get('https://kutipan.herokuapp.com/')
+                axios.get('https://slims.web.id/kutipan/')
                     .then(res => {
                         res.data.content = he.decode(res.data.content)
                         this.quotes = res.data
@@ -145,27 +147,34 @@ if (isset($_GET['select_lang'])) {
                     this.resetForm()
                     return
                 }
-                let url = 'index.php?p=visitor'
+                let url = 'index.php?p=visitor<?= trim(isset($_GET['room']) ? '&room=' . simbio_security::xssFree($_GET['room']) : '')  ?>'
                 let data = new FormData()
                 data.append('memberID', this.memberId)
                 data.append('institution', this.institution)
                 data.append('counter', 1)
+                data.append(this.csrfName, this.csrfToken)
 
                 axios({
                     url: url,
                     method: 'post',
                     data: data,
-                    headers: {'Content-Type': 'multipart/form-data' }
+                    headers: {'Content-Type': 'multipart/form-data', 'X-Response-With': 'application/json' }
                 })
                     .then(res => {
                         this.textInfo = res.data.message
                         this.image = `./images/persons/${res.data.image}`
+                        if (res.data.new_token) {
+                            this.csrfToken = res.data.new_token
+                        }
                         <?php if ($sysconf['template']['visitor_log_voice']) : ?>
                             this.textToSpeech(this.textInfo.replace(/(<([^>]+)>)/ig, ''))
                         <?php endif; ?>
                     })
                     .catch(err => {
                         console.log(err);
+                        if (err.response && err.response.data.new_token) {
+                            this.csrfToken = err.response.data.new_token
+                        }
                     })
                     .finally(() => {
                         this.resetForm()

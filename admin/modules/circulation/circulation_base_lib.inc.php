@@ -49,6 +49,7 @@ class circulation extends member
     public $holiday_dayname = array('Sun');
     public $holiday_date = array();
     public $loan_have_overdue = false;
+    public $ignore_holidays_fine_calc = '';
     public $error = '';
 
     /**
@@ -272,6 +273,13 @@ class circulation extends member
         }
         // update the loan data
         $this->obj_db->query("UPDATE loan SET is_return=1, return_date='$_return_date', last_update='".date("Y-m-d H:i:s")."' WHERE loan_id=$int_loan_id AND member_id='".$this->member_id."' AND is_lent=1 AND is_return=0");
+
+        // Update loan history (replaces update_loan_history trigger)
+        $this->updateLoanHistory($int_loan_id, array(
+            'is_return' => 1,
+            'return_date' => $_return_date
+        ));
+
         // add to receipt
         if (isset($_SESSION['receipt_record'])) {
             // get item data
@@ -333,6 +341,17 @@ class circulation extends member
         }
         $query = $this->obj_db->query("UPDATE loan SET renewed=renewed+1, due_date='$_due_date', is_return=0
             WHERE loan_id=$int_loan_id AND member_id='".$this->member_id."'");
+
+        $_renewed_q = $this->obj_db->query("SELECT renewed FROM loan WHERE loan_id=$int_loan_id");
+        $_renewed_d = $_renewed_q->fetch_row();
+        $new_renewed_count = intval($_renewed_d[0]);
+
+        // Update loan history (replaces update_loan_history trigger)
+        $this->updateLoanHistory($int_loan_id, array(
+            'renewed' => $new_renewed_count,
+            'is_return' => 0
+        ));
+
         $_SESSION['reborrowed'][] = $int_loan_id;
         // add to receipt
         if (isset($_SESSION['receipt_record'])) {
@@ -375,6 +394,8 @@ class circulation extends member
                 // count holiday and subtract it from overdue days
                 $_holiday_count = simbio_date::countHolidayBetween($_loan_d[0], $str_return_date, $this->holiday_dayname, $this->holiday_date);
                 $_overdue_days_ignore_holiday = $_overdue_days-$_holiday_count;
+                // prevent negative value, if $_holiday_count > $_overdue_days
+                if ($_overdue_days_ignore_holiday < 0) return false;
             }
             /* end of modification */
 
@@ -409,7 +430,7 @@ class circulation extends member
             } else {
                 $_fines_value = $this->fine_each_day*$_overdue_days;
                 if (isset($_overdue_days_ignore_holiday)){
-                    $_fines_value = $this->fine_each_day*$_overdue_days_ignore_holiday;  
+                    $_fines_value = $this->fine_each_day*$_overdue_days_ignore_holiday;
                     $_overdue_days = $_overdue_days_ignore_holiday;
                 }
                 return array('days' => $_overdue_days, 'value' => $_fines_value, 'item' => $_loan_d[2]);
@@ -426,6 +447,157 @@ class circulation extends member
     public function getOverdueDays()
     {
         return $this->overdue_days;
+    }
+
+
+    /**
+     * Convert literal values from simbio_dbop to actual values
+     * @param   mixed $value
+     * @return  mixed
+     **/
+    protected function convertLiteralValue($value)
+    {
+        if (is_string($value) && strpos($value, 'literal{') === 0) {
+            // Extract value from literal{value} format
+            return intval(str_replace(['literal{', '}'], '', $value));
+        }
+        return $value;
+    }
+
+
+    /**
+     * Insert loan history record (replaces insert_loan_history trigger)
+     * @param   integer $loan_id
+     * @param   array   $loan_data
+     * @return  boolean
+     **/
+    protected function insertLoanHistory($loan_id, $loan_data)
+    {
+        // Get additional bibliographic information
+        $query = "SELECT
+            b.title,
+            b.biblio_id,
+            IF(i.call_number IS NULL, b.call_number, i.call_number) as call_number,
+            b.classification,
+            g.gmd_name,
+            l.language_name,
+            ml.location_name,
+            mct.coll_type_name,
+            m.member_name,
+            mmt.member_type_name
+        FROM item i
+        LEFT JOIN biblio b ON i.biblio_id=b.biblio_id
+        LEFT JOIN mst_gmd g ON g.gmd_id=b.gmd_id
+        LEFT JOIN mst_language l ON b.language_id=l.language_id
+        LEFT JOIN mst_location ml ON i.location_id=ml.location_id
+        LEFT JOIN mst_coll_type mct ON i.coll_type_id=mct.coll_type_id
+        LEFT JOIN member m ON m.member_id='{$loan_data['member_id']}'
+        LEFT JOIN mst_member_type mmt ON m.member_type_id=mmt.member_type_id
+        WHERE i.item_code='{$loan_data['item_code']}'";
+
+        $result = $this->obj_db->query($query);
+        if ($result && $result->num_rows > 0) {
+            $biblio_data = $result->fetch_assoc();
+
+            // Prepare loan history data with proper escaping and handle literal values
+            $history_data = array(
+                'loan_id' => $loan_id,
+                'item_code' => $this->obj_db->escape_string($loan_data['item_code']),
+                'member_id' => $this->obj_db->escape_string($loan_data['member_id']),
+                'loan_date' => $loan_data['loan_date'],
+                'due_date' => $loan_data['due_date'],
+                'renewed' => $this->convertLiteralValue($loan_data['renewed'] ?? 0),
+                'is_lent' => isset($loan_data['is_lent']) ? $loan_data['is_lent'] : 1,
+                'is_return' => $this->convertLiteralValue($loan_data['is_return'] ?? 0),
+                'return_date' => isset($loan_data['return_date']) ? $loan_data['return_date'] : 'NULL',
+                'input_date' => $loan_data['input_date'],
+                'last_update' => $loan_data['last_update'],
+                'title' => $this->obj_db->escape_string($biblio_data['title'] ?? ''),
+                'biblio_id' => $biblio_data['biblio_id'] ?? 0,
+                'call_number' => $this->obj_db->escape_string($biblio_data['call_number'] ?? ''),
+                'classification' => $this->obj_db->escape_string($biblio_data['classification'] ?? ''),
+                'gmd_name' => $this->obj_db->escape_string($biblio_data['gmd_name'] ?? ''),
+                'language_name' => $this->obj_db->escape_string($biblio_data['language_name'] ?? ''),
+                'location_name' => $this->obj_db->escape_string($biblio_data['location_name'] ?? ''),
+                'collection_type_name' => $this->obj_db->escape_string($biblio_data['coll_type_name'] ?? ''),
+                'member_name' => $this->obj_db->escape_string($biblio_data['member_name'] ?? ''),
+                'member_type_name' => $this->obj_db->escape_string($biblio_data['member_type_name'] ?? '')
+            );
+
+            // Build INSERT query
+            $fields = array();
+            $values = array();
+            foreach ($history_data as $field => $value) {
+                $fields[] = $field;
+                if ($value === 'NULL' || $value === null) {
+                    $values[] = 'NULL';
+                } else {
+                    $values[] = "'" . $value . "'";
+                }
+            }
+
+            $insert_query = "INSERT INTO loan_history (" . implode(', ', $fields) . ")
+                           VALUES (" . implode(', ', $values) . ")";
+
+            $insert_result = $this->obj_db->query($insert_query);
+            return $insert_result !== false;
+        }
+
+        return false;
+    }
+
+
+    /**
+     * Update loan history record (replaces update_loan_history trigger)
+     * @param   integer $loan_id
+     * @param   array   $updated_data
+     * @return  boolean
+     **/
+    protected function updateLoanHistory($loan_id, $updated_data)
+    {
+        $update_fields = array();
+
+        // Map the fields that should be updated in loan_history
+        $updatable_fields = array(
+            'is_lent' => 'is_lent',
+            'is_return' => 'is_return',
+            'renewed' => 'renewed',
+            'return_date' => 'return_date'
+        );
+
+        foreach ($updatable_fields as $loan_field => $history_field) {
+            if (isset($updated_data[$loan_field])) {
+                $value = $updated_data[$loan_field];
+                if ($value === null || $value === 'NULL') {
+                    $update_fields[] = "$history_field=NULL";
+                } elseif ($loan_field === 'renewed' && is_numeric($value)) {
+                    $update_fields[] = "$history_field=" . intval($value);
+                } else {
+                    $update_fields[] = "$history_field='" . $this->obj_db->escape_string($value) . "'";
+                }
+            }
+        }
+
+        if (!empty($update_fields)) {
+            $update_query = "UPDATE loan_history SET " . implode(', ', $update_fields) . " WHERE loan_id=$loan_id";
+            $update_result = $this->obj_db->query($update_query);
+            return $update_result !== false;
+        }
+
+        return true;
+    }
+
+
+    /**
+     * Delete loan history record (replaces delete_loan_history trigger)
+     * @param   integer $loan_id
+     * @return  boolean
+     **/
+    protected function deleteLoanHistory($loan_id)
+    {
+        $delete_query = "DELETE FROM loan_history WHERE loan_id=$loan_id";
+        $delete_result = $this->obj_db->query($delete_query);
+        return $delete_result !== false;
     }
 
 
@@ -466,11 +638,15 @@ class circulation extends member
                 $data['input_date'] = date("Y-m-d H:i:s");
                 $data['last_update'] = date("Y-m-d H:i:s");
                 $data['uid'] = $_SESSION['uid'];
-                try {    
+                try {
                     $sql_op = new simbio_dbop($this->obj_db);
                     if ($sql_op->insert('loan', $data)) {
                         # get last insert id (loan_id)
                         $loan_id = $this->obj_db->insert_id;
+
+                        // Insert loan history (replaces insert_loan_history trigger)
+                        $this->insertLoanHistory($loan_id, $data);
+
                         if (isset($_SESSION['receipt_record'])) {
                             // get title
                             $_title_q = $this->obj_db->query('SELECT title, classification FROM biblio AS b INNER JOIN item AS i ON b.biblio_id=i.biblio_id WHERE i.item_code=\''.$data['item_code'].'\'');

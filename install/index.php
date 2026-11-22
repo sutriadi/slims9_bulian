@@ -6,13 +6,21 @@
  */
 
 if (file_exists(__DIR__ . '/../config/database.php')) {
-    header('Location: ' . '../index.php');
+    header('Location: ../index.php');
     exit();
 }
 
 session_start();
-$length = 24;
-$_SESSION['csrf_token'] = bin2hex(substr(str_shuffle(str_repeat($x='0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', ceil($length/strlen($x)) )),1,$length));
+
+$token_length = 24;
+try {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes($token_length));
+} catch (Exception $e) {
+    $length = $token_length * 2;
+    $_SESSION['csrf_token'] = bin2hex(substr(str_shuffle(str_repeat('0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', ceil($length/62))), 1, $length));
+}
+
+$version_timestamp = date('YmdHis');
 
 ?>
 <!doctype html>
@@ -100,14 +108,14 @@ $_SESSION['csrf_token'] = bin2hex(substr(str_shuffle(str_repeat($x='0123456789ab
     <tasks v-if="section === 'select-task'" @click="selectTask"></tasks>
     <install v-if="section === 'install'" @next="section = 'create-admin'"></install>
     <upgrade v-if="section === 'upgrade'" @next="section = 'select-version'"></upgrade>
-    <select-version v-if="section === 'select-version'" @success="section = 'success'"></select-version>
+    <select-version v-if="section === 'select-version'" @redirectwithmsg="setOptionalMsg" @success="section = 'success'"></select-version>
     <account v-if="section === 'create-admin'" @notwrite="setSection('show-config', 'create-admin')"
              @success="section = 'success'"></account>
     <show-config v-if="section === 'show-config'" :section="lastSection"></show-config>
-    <success v-if="section === 'success'"></success>
+    <success v-if="section === 'success'" :optionalmsg="optionalMessage"></success>
 </div>
 <!-- Required JavaScript -->
 <script src="js/vue.min.js"></script>
-<script src="js/main.js?v=<? date('YmdHis'); ?>" type="module" csrf="<?= $_SESSION['csrf_token'] ?>"></script>
+<script src="js/main.js?v=<?= $version_timestamp ?>" type="module" csrf="<?= $_SESSION['csrf_token'] ?>"></script>
 </body>
 </html>

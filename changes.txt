@@ -43,6 +43,99 @@ Code enhancement: John Antony (john.antony@iamplus.com)
 
 THANKS TO OUR USERS AND COMMUNITIES, YOU ARE DEVELOPERS TOO!
 
+SLiMS 9.8.0 (Bulian D Ace)
+========================================================================
+• Security: Hardened upload, image scraping, attachment handling, backup download/delete, lookup, visitor counter, and output escaping against SQLi, XSS, SSRF, CSRF, path traversal, and unsafe image metadata.
+• Search: Added Fuzzy Search and Sphinx Search engines with settings UI, active-engine integration, fallback handling, and larger index word support.
+• Reports: Added PDF export support via mPDF for datagrid reports and title lists.
+• Maintenance: Added Image Maintenance Tool for cleanup, rebuild, backup, and synchronization.
+• Circulation/Member: Added round-robin item reservation and fixed loan-history renewal/duplicate handling.
+• Bibliography/OPAC: Improved custom-field handling, template configurability, external repository uploads, thumbnail generation, and UCS auto-delete behavior.
+• Upgrade/Install: Synced installer schema with upgrade flow; optimized index definitions; updated dependencies and Docker environment handling.
+• Extensibility: Added hooks for sysconfig, OPAC index, Admin index, and bibliography save data references.
+
+SLiMS 9.7.2 (Bulian D Roger)
+========================================================================
+• Feature: Loan History Maintenance + menu integration.
+• Upgrade: Removed loan-history triggers; replaced with direct updates; Add submenu handling in upgrade flow.
+• UX: Clearer delete confirmations; defaulted withConfirm; switched form submit to blindSubmit; removed iframe submitExec.
+• Assets: Added missing Colorbox CSS/JS includes.
+• Reports: Improved procurement date handling (prioritize received_date) and validation.
+• Circulation: Refactored member info display for clarity.
+• Settings/I18n: Improved language selection; load global settings from DB.
+• Access Control/Menu: Tightened checks; added widespread submenu access; refactored submenu arrays to associative keys; fixed isAdmin path matching.
+
+SLiMS 9.7.1 (Bulian D Roger)
+========================================================================
+• Improved language selection handling and load of global settings from the database.
+• Improved CSRF token management with backward compatibility and more robust handling.
+• Modernized AJAX updater and related functions for better validation, error handling, and UX.
+• Stronger password policy enforcement for OPAC and admin/member areas.
+• Fixed CSV reader variable/initialization issues and improved CSV handling.
+• Hardened SQL queries in procurement reports to validate and exclude invalid dates.
+• Improvements to language selection and global settings loading.
+
+SLiMS 9.7.0 (Bulian D Roger)
+========================================================================
+Security - System security enhancements to protect data and application stability.
+• Comprehensive Security Patch: Patches SQL Injection and Stored XSS vulnerabilities, and enforces stronger password policies.
+• Server-Side Attack Prevention: Fixes potential Server-Side Request Forgery (SSRF) and SQL Injection vulnerabilities.
+• Upload Area Security: Improves .htaccess security.
+• Disables PHP5 script execution.
+• Sensitive Data Protection: Prevents direct access to hidden bibliographic details from the OPAC; hides credentials on error pages.
+• Cookie and Session Security: Default SecureCookie attribute for user session security.
+• Other Mitigations: Stripping EXIF ​​data from uploaded images; fixed ModSecurity issue.
+________________________________________
+Feature Enhancements & Changes
+• Customization and Extensibility: Added Custom Fields for Items; Expanded plugin ecosystem with the ability to load third-party languages; register new menus, and support for plugin modules.
+• Added new hooks to the system: login process, OAI, and deeper system customization configuration.
+• Support for custom OPAC templates.
+• Database and Data Management: Implemented the ability to connect to multiple databases simultaneously, added a file migration feature to another server, and configured the Copy Cataloging feature.
+• Development Environment: Docker support.
+• User Interface and Experience (UI/UX): Implemented a "Debug Box" to display debug information in a more structured manner, improved AJAX dropdown performance, and added a progress button for the data import process.
+________________________________________
+Bug Fixes
+• Data Import: Fixed various issues during the import process of bibliographic data (including MARC format) and membership, and fixed a bug where the import preview did not match the selected column separator.
+• Application Stability: Fixed "undefined variable," "undefined key," or "undefined offset" errors in various modules.
+• Data Management: Addressed issues with author and subject orphaned data deletion, the deletion process in the GMD module, the visit space, and backup files.
+• Module Functionality: Improved LDAP authentication functionality, resolved barcode label plugin compatibility, and improved filtering and updating borrowing history table.
+• System and Configuration: Fixed errors for large file upload, addressed incorrect URLs when running behind a web proxy, and resolved schema and multi-instance connection issues in PDO.
+________________________________________
+Other
+• Dependency Updates: Updated external libraries such as gettext, PHPSpreadsheet, league/flysystem, and symfony/var-dumper.
+• Refactoring and Code Quality Improvements: Refactored the registerAutoload strategy and form handling with the FormAjax class.
+• Documentation: Added and updated documentation for the Polyglot feature, Actions, and Docker commands.
+
+SLiMS 9.6.1 (Bulian)
+========================================================================
+Add : CSP Manager
+Add : CSV import sample
+Add : Clickable label element at input radio and checkbox
+Add : CSV Import Sample for Biblio, Item, & Member data
+Fixed : CJK (Chinese, Japanese, and Korean) character in E-Mail content
+Fixed : Bug in stock opname resync
+Fixed : MARC SRU Perpusnas RI
+Fixed : SSRF & LFI vulnerability
+Fixed : re-run session
+Fixed : unmatch column type at mst_visitor_room
+
+SLiMS 9.6.0 (Bulian)
+========================================================================
+Added : CSV import preview
+Added : Due date warning email notification
+Added : Storage library
+Added : Console feature
+Added : 2FA at admin login page
+Added : Configuration for multiple databases
+Added : Room location visitor counter
+Added : Captcha configuration user interface
+Added : Backup database notification
+Added : PHP 8 for minimum requirement
+Fixed : Zero existing items for stock opname report
+Fixed : Compatibility with MySQL 8
+Fixed : Loan by classification reporting query
+Fixed : OAIPMH for GetRecord
+
 SLiMS 9.5.2 (Bulian)
 ========================================================================
 Added : Bookmark for biblio data

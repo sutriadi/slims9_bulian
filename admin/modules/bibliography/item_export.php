@@ -43,6 +43,12 @@ $can_write = utility::havePrivilege('bibliography', 'w');
 if (!$can_read) {
     die('<div class="errorBox">'.__('You are not authorized to view this section').'</div>');
 }
+# CHECK ACCESS
+if ($_SESSION['uid'] != 1) {
+    if (!utility::haveAccess('bibliography.biblio-item-export')) {
+        die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
+    }
+}
 
 if (isset($_POST['doExport'])) {
     // check for form validity
@@ -119,7 +125,7 @@ if (isset($_POST['doExport'])) {
                     $buffer = null;
                     foreach ($item_d as $key => $fld_d) {
                         $headers[$key] = $key;
-                        $fld_d = $dbs->escape_string($fld_d);
+                        $fld_d = $dbs->escape_string($fld_d??'');
                         // data
                         $buffer .=  stripslashes($encloser.$fld_d.$encloser);
                         // field separator
@@ -163,8 +169,8 @@ if (isset($_POST['doExport'])) {
 <?php
 
 // create new instance
-$form = new simbio_form_table_AJAX('mainForm', $_SERVER['PHP_SELF'], 'post');
-$form->submit_button_attr = 'name="doExport" value="'.__('Export Now').'" class="s-btn btn btn-default"';
+$form = new simbio_form_table_AJAX('downloadForm', $_SERVER['PHP_SELF'], 'post');
+$form->submit_button_attr = 'name="doExport" data-filename="senayan_item_export.csv" value="'.__('Export Now').'" class="s-btn btn btn-default"';
 
 // form table attributes
 $form->table_attr = 'id="dataList" class="s-table table"';
@@ -173,7 +179,7 @@ $form->table_content_attr = 'class="alterCell2"';
 
 /* Form Element(s) */
 // field separator
-$form->addTextField('text', 'fieldSep', __('Field Separator').'*', ''.htmlentities(';').'', 'style="width: 10%;" maxlength="3" class="form-control"');
+$form->addTextField('text', 'fieldSep', __('Field Separator').'*', ''.htmlentities(',').'', 'style="width: 10%;" maxlength="3" class="form-control"');
 //  field enclosed
 $form->addTextField('text', 'fieldEnc', __('Field Enclosed With').'*', ''.htmlentities('"').'', 'style="width: 10%;" class="form-control"');
 // record separator

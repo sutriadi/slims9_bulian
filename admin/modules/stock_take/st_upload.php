@@ -58,13 +58,17 @@ if (isset($_POST['stUpload']) && isset($_FILES['stFile'])) {
     // create upload object
     $upload = new simbio_file_upload();
     $upload->setAllowableFormat(array('.txt'));
+    $upload->setAllowableMimeTypes(array(
+      'text/plain',
+      'application/octet-stream'
+    ));
     $upload->setMaxSize($sysconf['max_upload']*1024);
     $upload->setUploadDir(UPLOAD);
     // upload the file and change all space characters to underscore
     $upload_status = $upload->doUpload('stFile');
     if ($upload_status == UPLOAD_SUCCESS) {
         // write log
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'stock_take', $_SESSION['realname'].' upload stock take file '.$upload->new_filename, 'Upload data', 'OK');
+        writeLog('staff', $_SESSION['uid'], 'stock_take', $_SESSION['realname'].' upload stock take file '.$upload->new_filename, 'Upload data', 'OK');
         // open file
         $stfile = @fopen(UPLOAD.$upload->new_filename, 'r');
         if (!$stfile) {
@@ -78,19 +82,24 @@ if (isset($_POST['stUpload']) && isset($_FILES['stFile'])) {
         $i = 0;
         while (!feof($stfile)) {
             $curr_time = date('Y-m-d H:i:s');
-            $item_code = fgets($stfile, 512);
-            $item_code = trim($item_code);
+            $item_code = fgets($stfile, 80);
+            // strip any html tags
+            $item_code = strip_tags(trim($item_code));
             if (!$item_code) {
+                continue;
+            }
+            if (!preg_match('/^[a-zA-Z0-9_\-\.]+$/', $item_code)) {
                 continue;
             }
 
             // check item status first
-            $item_check = $dbs->query("SELECT * FROM stock_take_item WHERE item_code='$item_code'");
+            $item_code = $dbs->real_escape_string($item_code);
+            $item_check = $dbs->query(sprintf( "SELECT * FROM stock_take_item WHERE item_code='%s'", $item_code ));
             $item_check_d = $item_check->fetch_assoc();
             if ($item_check->num_rows > 0) {
                 if ($item_check_d['status'] == 'l') {
                     // record to log
-                    utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'stock_take', 'Stock Take ERROR : Item '.$item_check_d['title'].' ('.$item_check_d['item_code'].') is currently ON LOAN (from uploaded file '.$upload->new_filename.')', 'Item', 'Error');
+                    writeLog('staff', $_SESSION['uid'], 'stock_take', 'Stock Take ERROR : Item '.$item_check_d['title'].' ('.$item_check_d['item_code'].') is currently ON LOAN (from uploaded file '.$upload->new_filename.')', 'Item', 'Error');
                     continue;
                 } else if ($item_check_d['status'] == 'e') {
                     continue;
@@ -101,7 +110,7 @@ if (isset($_POST['stUpload']) && isset($_FILES['stFile'])) {
                 }
             } else {
                 // record to log
-                utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'stock_take', 'Stock Take ERROR : Item Code '.$item_code.' doesnt exists in stock take data. Invalid Item Code OR Maybe out of Stock Take range (from uploaded file '.$upload->new_filename.')');
+                writeLog('staff', $_SESSION['uid'], 'stock_take', 'Stock Take ERROR : Item Code '.$item_code.' doesnt exists in stock take data. Invalid Item Code OR Maybe out of Stock Take range (from uploaded file '.$upload->new_filename.')');
             }
         }
         fclose($stfile);
@@ -112,7 +121,7 @@ if (isset($_POST['stUpload']) && isset($_FILES['stFile'])) {
         echo '</script>';
     } else {
         // write log
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'stock_take', 'ERROR : '.$_SESSION['realname'].' FAILED TO upload stock take file '.$upload->new_filename.', with error ('.$upload->error.')', 'Upload data', 'Fail');
+        writeLog('staff', $_SESSION['uid'], 'stock_take', 'ERROR : '.$_SESSION['realname'].' FAILED TO upload stock take file '.$upload->new_filename.', with error ('.$upload->error.')', 'Upload data', 'Fail');
         echo '<script type="text/javascript">'."\n";
         echo 'parent.$(\'#stUploadMsg\').html(\'Failed to upload stock take file! <div>Error : '.$upload->error.'</div>\')';
         echo '.toggleClass(\'errorBox\').css( {\'display\': \'block\'} );'."\n";
@@ -133,7 +142,7 @@ if (isset($_POST['stUpload']) && isset($_FILES['stFile'])) {
     <div class="container-fluid">
         <div class="row">
             <div class="custom-file col-6">
-                <input type="file" name="stFile" id="stFile" value="" class="custom-file-input">
+                <input type="file" name="stFile" id="stFile" value="" class="custom-file-input" accept=".txt,text/plain">
                 <label class="custom-file-label" for="customFile"><?= __('Choose file')?></label></div>
                 <div class="col"><div class="mt-2"><?= __(sprintf('Maximum %s KB',$sysconf['max_upload']))?></div></div>
             </div>

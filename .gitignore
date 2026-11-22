@@ -4,7 +4,7 @@ images/docs/*
 images/labels/*
 images/cache/*
 images/content/*
-images/default/logo.png
+images/default/logo.*
 images/default/webicon.*
 files/*
 !files/membercard/*
@@ -22,6 +22,7 @@ config/sysconfig.local.inc.php
 sysconfig.inc.php
 slims8_akasia.sublime-project
 slims8_akasia.sublime-workspace
+.env
 
 plugins/*
 !plugins/read_counter/
@@ -49,5 +50,12 @@ $RECYCLE.BIN/
 
 /vendor/
 composer.lock
-config/sysconfig.env.inc.php
 config/database.php
+config/captcha.php
+config/env.php
+config/csp.php
+config/auth.php
+tarsius
+
+.env
+.htaccess

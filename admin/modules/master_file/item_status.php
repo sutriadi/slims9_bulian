@@ -64,24 +64,21 @@ if (isset($_POST['saveData'])) {
         $data['item_status_id'] = $dbs->escape_string($itemStatusID);
         $data['item_status_name'] = $dbs->escape_string($itemStatusName);
         // parsing rules
-		/*
+        /*
         $rules = '';
         if (isset($_POST['rules']) AND !empty($_POST['rules'])) {
             $rules = serialize($_POST['rules']);
         } else {
             $rules = 'literal{NULL}';
         }
-		*/
+        */
         $data['rules'] = 'literal{NULL}';
-		if (isset($_POST['rules']) AND !empty($_POST['rules'])) {
-			foreach ($_POST['rules'] as $rule) {
-				if ((integer)$rule == NO_LOAN_TRANSACTION) {
-					$data['no_loan'] = 1;
-				} else if ((integer)$rule == SKIP_STOCK_TAKE) {
-					$data['skip_stock_take'] = 1;
-				}
-			}
-		}
+        $data['no_loan'] = '0';
+        $data['skip_stock_take'] = '0';
+        foreach ($_POST['rules']??[] as $rule) {
+            if ((integer)$rule === NO_LOAN_TRANSACTION) $data['no_loan'] = '1';
+            if ((integer)$rule === SKIP_STOCK_TAKE) $data['skip_stock_take'] = '1';
+        }
         $data['input_date'] = date('Y-m-d');
         $data['last_update'] = date('Y-m-d');
 
@@ -108,7 +105,7 @@ if (isset($_POST['saveData'])) {
             /* INSERT RECORD MODE */
             // insert the data
             $insert = $sql_op->insert('mst_item_status', $data);
-            if ($insert) {                
+            if ($insert) {          
                 utility::jsToastr(__('Item Status'), __('New Item Status Data Successfully Saved'), 'success');
                 echo '<script type="text/javascript">parent.jQuery(\'#mainContent\').simbioAJAX(\''.$_SERVER['PHP_SELF'].'\');</script>';
             } else { 
@@ -126,7 +123,7 @@ if (isset($_POST['saveData'])) {
     $sql_op = new simbio_dbop($dbs);
     $failed_array = array();
     $error_num = 0;
-    $still_have_item = array();    
+    $still_have_item = array();     
     if (!is_array($_POST['itemID'])) {
         // make an array
         $_POST['itemID'] = array($dbs->escape_string(trim($_POST['itemID'])));
@@ -135,18 +132,25 @@ if (isset($_POST['saveData'])) {
     foreach ($_POST['itemID'] as $itemID) {
         $itemID = $dbs->escape_string(trim($itemID));
         // check if this place data still in use items
+
         $_sql_status_item_q = sprintf('SELECT mis.item_status_name, COUNT(mis.item_status_id) FROM item AS i
         LEFT JOIN mst_item_status AS mis ON i.item_status_id=mis.item_status_id
-        WHERE mis.item_status_id=%d GROUP BY mis.item_status_name', $itemID);
+        WHERE mis.item_status_id=\'%s\' GROUP BY mis.item_status_name', $itemID);
+        
         $status_item_q = $dbs->query($_sql_status_item_q);
         $status_item_d = $status_item_q->fetch_row();
-        if ($status_item_d[1] < 1) {
+        
+        if (is_array($status_item_d) AND $status_item_d[1] < 1) { // Line 140
             if (!$sql_op->delete('mst_item_status', "item_status_id='$itemID'")) {
                 $error_num++;
             }
-        }else{
+        } else if (is_array($status_item_d)) {
             $still_have_item[] = sprintf(__('%s still in use %d item ').'<br/>',substr($status_item_d[0], 0, 45),$status_item_d[1]);
-            $error_num++;            
+            $error_num++;          
+        } else {
+             if (!$sql_op->delete('mst_item_status', "item_status_id='$itemID'")) {
+                $error_num++;
+            }
         }
     }
 
@@ -165,7 +169,7 @@ if (isset($_POST['saveData'])) {
         utility::jsToastr(__('Item Status'), __('All Data Successfully Deleted'), 'success');
         echo '<script type="text/javascript">parent.jQuery(\'#mainContent\').simbioAJAX(\''.$_SERVER['PHP_SELF'].'?'.$_POST['lastQueryStr'].'\');</script>';
     } else {
-        utility::jsToastr(__('Item Status'), __('Some or All Data NOT deleted successfully!\nPlease contact system administrator'), 'warning');        
+        utility::jsToastr(__('Item Status'), __('Some or All Data NOT deleted successfully!\nPlease contact system administrator'), 'warning');          
         echo '<script type="text/javascript">parent.jQuery(\'#mainContent\').simbioAJAX(\''.$_SERVER['PHP_SELF'].'?'.$_POST['lastQueryStr'].'\');</script>';
     }
     exit();
@@ -176,19 +180,19 @@ if (isset($_POST['saveData'])) {
 ?>
 <div class="menuBox">
 <div class="menuBoxInner masterFileIcon">
-	<div class="per_title">
-	    <h2><?php echo __('Item Status'); ?></h2>
+    <div class="per_title">
+        <h2><?php echo __('Item Status'); ?></h2>
   </div>
-	<div class="sub_section">
-	  <div class="btn-group">
+    <div class="sub_section">
+      <div class="btn-group">
       <a href="<?php echo MWB; ?>master_file/item_status.php" class="btn btn-default"><?php echo __('Item Status'); ?></a>
-		  <a href="<?php echo MWB; ?>master_file/item_status.php?action=detail" class="btn btn-default"><?php echo __('Add New Item Status'); ?></a>
-	  </div>
+          <a href="<?php echo MWB; ?>master_file/item_status.php?action=detail" class="btn btn-default"><?php echo __('Add New Item Status'); ?></a>
+      </div>
     <form name="search" action="<?php echo MWB; ?>master_file/item_status.php" id="search" method="get" class="form-inline"><?php echo __('Search'); ?> 
     <input type="text" name="keywords" class="form-control col-md-3" />
     <input type="submit" id="doSearch" value="<?php echo __('Search'); ?>" class="s-btn btn btn-default" />
     </form>
-	</div>
+    </div>
 </div>
 </div>
 <?php
@@ -229,13 +233,12 @@ if (isset($_POST['detail']) OR (isset($_GET['action']) AND $_GET['action'] == 'd
     // item status name
     $form->addTextField('text', 'itemStatus', __('Item Status Name').'*', $rec_d['item_status_name']??'', 'style="width: 60%;" class="form-control"');
     // item status rules
-	$rules = array();
-	if (isset($rec_d['no_loan'])) {
-		$rules[] = NO_LOAN_TRANSACTION;
-	}
-	if (isset($rec_d['skip_stock_take'])) {
-		$rules[] = SKIP_STOCK_TAKE;
-	}
+    $rules = array();
+
+    if ($rec_d['no_loan']??false) $rules[] = NO_LOAN_TRANSACTION;
+
+    if ($rec_d['skip_stock_take']??false) $rules[] = SKIP_STOCK_TAKE;
+
     $form->addCheckbox('rules', __('Rules'), $rules_option, $rules);
 
     // edit mode messagge
@@ -265,7 +268,7 @@ if (isset($_POST['detail']) OR (isset($_GET['action']) AND $_GET['action'] == 'd
 
     // change the record order
     if (isset($_GET['fld']) AND isset($_GET['dir'])) {
-        $datagrid->setSQLorder("'".urldecode($_GET['fld'])."' ".$dbs->escape_string($_GET['dir']));
+        $datagrid->setSQLorder("'".urldecode($dbs->escape_string($_GET['fld']))."' ".$dbs->escape_string($_GET['dir']));
     }
 
     // is there any search

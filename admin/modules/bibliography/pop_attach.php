@@ -18,6 +18,9 @@
  *
  */
 
+use SLiMS\Filesystems\Storage;
+use SLiMS\Url;
+
 /* Biblio file Adding Pop Windows */
 
 // key to authenticate
@@ -47,6 +50,30 @@ if (!$can_write) {
   die('<div class="errorBox">'.__('You are not authorized to view this section').'</div>');
 }
 
+function cleanUrl($url)
+{
+  $Url = Url::parse($url);
+  $hostname = $Url->getHost() ?? $Url->getDomain();
+  if (!in_array(strtolower($Url->getScheme()), ['http', 'https'])) {
+      return '';
+  }
+
+  $ip = @gethostbyname($hostname);
+  if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+      if (filter_var($ip, FILTER_VALIDATE_IP)) {
+          return '';
+      }
+  }
+
+  $port = $Url->getPort() ? ':' . $Url->getPort() : '';
+  return $Url->getScheme() . '://' . 
+         $hostname .
+         $port . 
+         $Url->getPath() . 
+         ($Url->getQuery() ? '?' . $Url->getQuery() : '') . 
+         ($Url->getFragment() ? '#' . $Url->getFragment() : '');
+}
+
 // page title
 $page_title = 'File Attachment Upload';
 
@@ -69,34 +96,65 @@ if (isset($_POST['upload']) AND trim(strip_tags($_POST['fileTitle'])) != '') {
   $uploaded_file_id = 0;
   $title = trim(strip_tags($_POST['fileTitle']));
   $url = trim(strip_tags($_POST['fileURL']));
+
+  $clean_url = $url;
+  if (!empty($url)) {
+    if (!filter_var($url, FILTER_VALIDATE_URL)) {
+         utility::jsToastr('File Attachment', __('URL not valid!'), 'error');
+         die();
+    }
+    // Cek SSRF
+    $clean_url = cleanUrl($url);
+    if (empty($clean_url)) {
+        utility::jsToastr('File Attachment', __('URL is an internal or forbidden address!'), 'error');
+        die();
+    }
+  }
+  $url = $clean_url;
+
   // create new sql op object
   $sql_op = new simbio_dbop($dbs);
   // FILE UPLOADING
+  if (isset($_FILES['file2attach']) && $_FILES['file2attach']['error'] == 1)
+  {
+    toastr(__('Invalid attacment, make sure your file is not exceeded system max upload'))->error();
+  }
+
   if (isset($_FILES['file2attach']) AND $_FILES['file2attach']['size']) {
     // create upload object
     $file_dir = trim($_POST['fileDir']);
-    $file_upload = new simbio_file_upload();
-    $file_upload->setAllowableFormat($sysconf['allowed_file_att']);
-    $file_upload->setMaxSize($sysconf['max_upload']*1024);
-    $file_upload->setUploadDir(REPOBS.DS.str_replace('/', DS, $file_dir));
-    $file_upload_status = $file_upload->doUpload('file2attach',md5(date('Y-m-d H:i:s')));
-    if ($file_upload_status === UPLOAD_SUCCESS) {
-        $file_ext = substr($file_upload->new_filename, strrpos($file_upload->new_filename, '.')+1);
+    $sub_dir = !empty($file_dir) ? trim($file_dir, '/\\') . DIRECTORY_SEPARATOR : '';
+    $file_upload = Storage::repository()->upload('file2attach', function($repository) use($sysconf) {
+
+      // Extension check
+      $repository->isExtensionAllowed();
+
+      // File size check
+      $repository->isLimitExceeded($sysconf['max_upload']*1024);
+
+      // destroy it if failed
+      if (!empty($repository->getError())) $repository->destroyIfFailed();
+
+    })->as($sub_dir . md5(date('Y-m-d H:i:s')));  // set new name
+
+
+    if ($file_upload->getUploadStatus()) {
+        $file_ext = $file_upload->getExt($file_upload->getUploadedFileName());
         $fdata['uploader_id'] = $_SESSION['uid'];
         $fdata['file_title'] = $dbs->escape_string($title);
-        $fdata['file_name'] = $dbs->escape_string($file_upload->new_filename);
+        $fdata['file_name'] = $dbs->escape_string($file_upload->getUploadedFileName());
         $fdata['file_url'] = $dbs->escape_string($url);
         $fdata['file_dir'] = $dbs->escape_string($file_dir);
         $fdata['file_desc'] = $dbs->escape_string(trim(strip_tags($_POST['fileDesc'])));
         if(isset($_POST['fileKey']) && trim($_POST['fileKey']) !== '')
           $fdata['file_key'] = $dbs->escape_string(trim(strip_tags($_POST['fileKey'])));
-        $fdata['mime_type'] = $sysconf['mimetype'][$file_ext];
+        $fdata['mime_type'] = $sysconf['mimetype'][trim($file_ext, '.')]??'';
         $fdata['input_date'] = date('Y-m-d H:i:s');
         $fdata['last_update'] = $fdata['input_date'];
         // insert file data to database
         @$sql_op->insert('files', $fdata);
         $uploaded_file_id = $sql_op->insert_id;
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'].' upload file ('.$file_upload->new_filename.')', 'Attachment', 'Add');
+        writeLog('staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'].' upload file ('.$file_upload->getUploadedFileName().')', 'Attachment', 'Add');
     } else {
       utility::jsToastr('File Attachment', __('Upload FAILED! Forbidden file type or file size too big!'), 'error');
       echo '<script type="text/javascript">';
@@ -105,7 +163,7 @@ if (isset($_POST['upload']) AND trim(strip_tags($_POST['fileTitle'])) != '') {
       die();
     }
   } else {
-    if ($url && preg_match('@^(http|https|ftp|gopher):\/\/@i', $url)) {
+    if (!empty($url)) {
       $fdata['uploader_id'] = $_SESSION['uid'];
       $fdata['file_title'] = $dbs->escape_string($title);
       $fdata['file_name'] = $dbs->escape_string($url);
@@ -113,7 +171,7 @@ if (isset($_POST['upload']) AND trim(strip_tags($_POST['fileTitle'])) != '') {
       $fdata['file_dir'] = 'literal{NULL}';
       $fdata['file_desc'] = $dbs->escape_string(trim(strip_tags($_POST['fileDesc'])));
       if(isset($_POST['fileKey']) && trim($_POST['fileKey']) !== '')
-          $fdata['file_key'] = $dbs->escape_string(trim(strip_tags($_POST['fileKey'])));
+           $fdata['file_key'] = $dbs->escape_string(trim(strip_tags($_POST['fileKey'])));
       $fdata['mime_type'] = 'text/uri-list';
       $fdata['input_date'] = date('Y-m-d H:i:s');
       $fdata['last_update'] = $fdata['input_date'];
@@ -145,13 +203,22 @@ if (isset($_POST['upload']) AND trim(strip_tags($_POST['fileTitle'])) != '') {
 
     if (isset($_POST['updateFileID'])) {
       $fileID = (integer)$_POST['updateFileID'];
+      $where_clause_ba = 'biblio_id=' . (integer)$updateBiblioID . ' AND file_id=' . (integer)$fileID;
+
       // file biblio access update
-      $update1 = $sql_op->update('biblio_attachment', array('access_type' => $data['access_type'], 'access_limit' => $data['access_limit'], 'placement' => $data['placement']), 'biblio_id='.$updateBiblioID.' AND file_id='.$fileID);
+      $update1 = $sql_op->update('biblio_attachment', array('access_type' => $data['access_type'], 'access_limit' => $data['access_limit'], 'placement' => $data['placement']), $where_clause_ba);
+
       // file description update
-      $file_desc_update = array('file_title' => $title, 'file_url' => $url, 'file_desc' => $dbs->escape_string(trim($_POST['fileDesc'])));
+      $file_desc_update = array(
+          'file_title' => $dbs->escape_string($title),
+          'file_url' => $dbs->escape_string($url),
+          'file_desc' => $dbs->escape_string(trim(strip_tags($_POST['fileDesc'])))
+      );
       if(isset($_POST['fileKey']))
           $file_desc_update['file_key'] = $dbs->escape_string(trim(strip_tags($_POST['fileKey'])));
-      $update2 = $sql_op->update('files', $file_desc_update, 'file_id='.$fileID);
+
+      $update2 = $sql_op->update('files', $file_desc_update, 'file_id='.(integer)$fileID);
+
       if ($update1) {
         utility::jsToastr('File Attachment', __('File Attachment data updated!'), 'success');
         echo '<script type="text/javascript">';
@@ -170,7 +237,7 @@ if (isset($_POST['upload']) AND trim(strip_tags($_POST['fileTitle'])) != '') {
         utility::jsToastr('File Attachment',''.__('File Attachment data FAILED to save!').''."\n".$sql_op->error, 'error');
       }
     }
-    utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'].' updating file attachment data', 'Attachment', 'Update');
+    writeLog('staff', $_SESSION['uid'], 'bibliography', $_SESSION['realname'].' updating file attachment data', 'Attachment', 'Update');
   } else {
     if ($uploaded_file_id) {
       // add to session array
@@ -196,7 +263,7 @@ $form->table_content_attr = 'class="alterCell2"';
 // query
 $file_attach_q = $dbs->query("SELECT fl.*, batt.* FROM files AS fl
   LEFT JOIN biblio_attachment AS batt ON fl.file_id=batt.file_id
-  WHERE batt.biblio_id=$biblioID AND batt.file_id=$fileID");
+  WHERE batt.biblio_id=".(integer)$biblioID." AND batt.file_id=".(integer)$fileID);
 $file_attach_d = $file_attach_q->fetch_assoc();
 
 // edit mode

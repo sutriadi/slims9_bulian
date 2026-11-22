@@ -3,7 +3,7 @@
  * @author Drajat Hasan
  * @email drajathasan20@gmail.com
  * @create date 2022-12-17 07:14:29
- * @modify date 2022-12-26 13:16:42
+ * @modify date 2023-05-28 06:59:56
  * @license GPLv3
  * @desc [description]
  */
@@ -12,14 +12,6 @@ namespace SLiMS;
 
 class Url
 {
-    /**
-     * If SLiMS behind reverse proxy
-     * you must set this property to true
-     *
-     * @var boolean
-     */
-    public static $forceHttps = false;
-
     /**
      * This property is used to make
      * some magic method to generate result
@@ -50,8 +42,15 @@ class Url
      */
     public static function getDomain(bool $strict = true)
     {
-        if (!in_array(self::getPort(), [80,443]) && $strict) return $_SERVER['SERVER_NAME'] . ':' . self::getPort();
-        return $_SERVER['SERVER_NAME'];
+        $loadBalance = self::getConfig('loadbalanced');
+        $domain = $loadBalance && $loadBalance['env'] ? $loadBalance['options']['host'] : $_SERVER['SERVER_NAME'];
+        if (!in_array(self::getPort(), [80,443]) && $strict) return $domain . ':' . self::getPort();
+        return $domain;
+    }
+
+    private static function getConfig(string $path)
+    {
+        return Config::getInstance()->get($path);
     }
 
     /**
@@ -61,7 +60,8 @@ class Url
      */
     public static function getPort()
     {
-        return $_SERVER['SERVER_PORT'];
+        $loadBalance = self::getConfig('loadbalanced');
+        return  $loadBalance && $loadBalance['env'] ? $loadBalance['options']['port'] : $_SERVER['SERVER_PORT'];
     }
 
     /**
@@ -71,7 +71,9 @@ class Url
      */
     public static function getScheme()
     {
-        return (self::$forceHttps ? 'https' : $_SERVER['REQUEST_SCHEME']) . '://';
+        $forceHttps = self::getConfig('url.force_https');
+        $loadBalance = self::getConfig('loadbalanced');
+        return ($forceHttps ? 'https' : ($loadBalance && $loadBalance['env'] ? $loadBalance['options']['scheme'] : 'http')) . '://';
     }
 
     /**
@@ -81,8 +83,8 @@ class Url
      */
     public static function getPath($callBack = '')
     {
-        if (is_callable($callBack)) return $callBack($_SERVER['PHP_SELF']);
-        return trim($_SERVER['PHP_SELF'] == '/index.php' ? '/' : dirname($_SERVER['PHP_SELF']) . '/');
+        if (is_callable($callBack)) return $callBack(SWB);
+        return SWB;
     }
 
     /**
@@ -138,6 +140,23 @@ class Url
         return self::parse($url)->getDomain() === self::getDomain($strict = false);
     }
 
+    public static function isAdmin()
+    {
+        $self = self::getSelf() ?? '';
+        // return true when any path segment is "admin" (e.g. /admin/index.php, /slims/admin/, /slims/subpath/admin/)
+        return (bool) preg_match('#(?:/|^)admin(?:/|$)#i', $self);
+    }
+
+    public static function isOpac()
+    {
+        return self::isAdmin() === false;
+    }
+
+    public static function inXml()
+    {
+        return isset($_GET['resultXML']) || isset($_GET['inXML']);
+    }
+
     /**
      * Parsing URL with style!
      *
@@ -184,6 +203,8 @@ class Url
      */
     public static function __callStatic($method, $arguments)
     {
+        if (php_sapi_name() === 'cli') return;
+        
         $static = new Static;
         $method = lcfirst(str_replace('get', '', $method));
         if (!isset(self::$scopes[$method])) return;

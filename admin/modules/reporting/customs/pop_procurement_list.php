@@ -35,7 +35,7 @@ ob_start();
 
 $page_title = 'Procurement List';
 
-$filter = isset($_GET['filter'])?$dbs->escape_string(simbio_security::xssFree($_GET['filter'])):'%%';
+$filter = isset($_GET['filter'])?$dbs->real_escape_string(simbio_security::xssFree($_GET['filter'])):'%%';
 ?>
 <div class="menuBox">
 <div class="menuBoxInner backupIcon">
@@ -111,7 +111,27 @@ LEFT JOIN mst_publisher mp ON mp.publisher_id=b.publisher_id
 LEFT JOIN mst_gmd mg ON mg.gmd_id=b.gmd_id
 LEFT JOIN mst_language mlang ON  mlang.language_id=b.language_id
 LEFT JOIN mst_place mpl ON mpl.place_id=b.publish_place_id';
-$criteria = " YEAR(i.input_date) LIKE '".($filter==__('ALL')?'%%':$filter)."'";
+$criteria = " (
+    (i.received_date IS NOT NULL 
+     AND i.received_date NOT IN ('', '0000-00-00','0000-00-00 00:00:00') 
+     AND i.received_date RLIKE '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
+    OR 
+    (i.input_date IS NOT NULL 
+     AND i.input_date NOT IN ('', '0000-00-00','0000-00-00 00:00:00') 
+     AND i.input_date RLIKE '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
+) AND YEAR(
+    CASE 
+        WHEN i.received_date IS NOT NULL 
+            AND i.received_date NOT IN ('', '0000-00-00','0000-00-00 00:00:00') 
+            AND i.received_date RLIKE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' 
+        THEN i.received_date
+        WHEN i.input_date IS NOT NULL 
+            AND i.input_date NOT IN ('', '0000-00-00','0000-00-00 00:00:00') 
+            AND i.input_date RLIKE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' 
+        THEN i.input_date
+        ELSE NULL
+    END
+) LIKE '".($filter==__('ALL')?'%%':$filter)."'";
 // create datagrid
 $datagrid = new simbio_datagrid();
 $datagrid->setSQLColumn(
@@ -119,26 +139,46 @@ $datagrid->setSQLColumn(
     'b.title AS  \''.__('Title').'\'',     
     'b.classification AS \''.__('Classification').'\'',    
     'mct.coll_type_name AS \''.__('Collection Type').'\'', 
-    'i.input_date AS \''.__('Input Date').'\'');
-$datagrid->setSQLorder('i.input_date DESC');
+    'CASE 
+        WHEN i.received_date IS NOT NULL 
+            AND i.received_date NOT IN (\'\', \'0000-00-00\',\'0000-00-00 00:00:00\') 
+            AND i.received_date RLIKE \'^[0-9]{4}-[0-9]{2}-[0-9]{2}\' 
+        THEN i.received_date
+        WHEN i.input_date IS NOT NULL 
+            AND i.input_date NOT IN (\'\', \'0000-00-00\',\'0000-00-00 00:00:00\') 
+            AND i.input_date RLIKE \'^[0-9]{4}-[0-9]{2}-[0-9]{2}\' 
+        THEN i.input_date
+        ELSE NULL
+    END AS \''.__('Received Date').'\'');
+$datagrid->setSQLorder('CASE 
+    WHEN i.received_date IS NOT NULL 
+        AND i.received_date NOT IN (\'\', \'0000-00-00\',\'0000-00-00 00:00:00\') 
+        AND i.received_date RLIKE \'^[0-9]{4}-[0-9]{2}-[0-9]{2}\' 
+    THEN i.received_date
+    WHEN i.input_date IS NOT NULL 
+        AND i.input_date NOT IN (\'\', \'0000-00-00\',\'0000-00-00 00:00:00\') 
+        AND i.input_date RLIKE \'^[0-9]{4}-[0-9]{2}-[0-9]{2}\' 
+    THEN i.input_date
+    ELSE NULL
+END DESC');
 
 // is there any search
 if (isset($_GET['keywords']) AND $_GET['keywords']) {
-   $keywords = $dbs->escape_string($_GET['keywords']);
+   $keywords = $dbs->real_escape_string($_GET['keywords']);
    $criteria .= " AND (b.title LIKE '%$keywords%' OR i.item_code LIKE '%$keywords%') ";
 }
 if (isset($_GET['classification']) AND $_GET['classification'] !== '') {
-   $classification = $dbs->escape_string($_GET['classification']);
+   $classification = $dbs->real_escape_string($_GET['classification']);
    $criteria .= ($classification!='other')?" AND b.classification LIKE '$classification%'":" AND (trim(b.classification) REGEXP '^[^0-9]' OR trim(b.classification)='' OR trim(b.classification) IS NULL)";
 }
 
 if (isset($_GET['coll_type']) AND $_GET['coll_type']) {
-   $coll_type = $dbs->escape_string($_GET['coll_type']);
+   $coll_type = $dbs->real_escape_string($_GET['coll_type']);
    $criteria .= ($coll_type!='other')?" AND i.coll_type_id='$coll_type'":" AND i.coll_type_id=''";
 }
 
 if (isset($_GET['location']) AND $_GET['location']) {
-   $location = $dbs->escape_string($_GET['location']);
+   $location = $dbs->real_escape_string($_GET['location']);
    $criteria .=($location!='other')?" AND i.location_id LIKE '$location'":" AND i.location_id = ''";
 }
 
@@ -166,7 +206,17 @@ $xlsquery = 'SELECT i.item_code AS \''.__('Item Code').'\''.
     ',i.site AS \''.__('Self Location').'\''.
     ',ml.location_name AS \''.__('Location').'\''. 
     ',i.price AS \''.__('Price').'\''.
-    ',i.input_date AS \''.__('Input Date').'\''.
+    ',CASE 
+        WHEN i.received_date IS NOT NULL 
+            AND i.received_date NOT IN (\'\', \'0000-00-00\',\'0000-00-00 00:00:00\') 
+            AND i.received_date RLIKE \'^[0-9]{4}-[0-9]{2}-[0-9]{2}\' 
+        THEN i.received_date
+        WHEN i.input_date IS NOT NULL 
+            AND i.input_date NOT IN (\'\', \'0000-00-00\',\'0000-00-00 00:00:00\') 
+            AND i.input_date RLIKE \'^[0-9]{4}-[0-9]{2}-[0-9]{2}\' 
+        THEN i.input_date
+        ELSE NULL
+    END AS \''.__('Received Date').'\''.
     ' FROM '.$table_spec.' WHERE '.$criteria;
 
 unset($_SESSION['xlsdata']);

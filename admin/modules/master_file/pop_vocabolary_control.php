@@ -58,8 +58,11 @@ $page_title = __('Vocabulary Control');
 function checkSubject($str_subject, $str_subject_type = 't')
 {
     global $dbs;
-    $_q = $dbs->query('SELECT topic_id FROM mst_topic WHERE topic=\''.$str_subject.'\' AND topic_type=\''.$str_subject_type.'\'');
-    if ($_q->num_rows > 0) {
+    $str_subject = $dbs->real_escape_string($str_subject);
+    $str_subject_type = $dbs->real_escape_string($str_subject_type);
+
+    $_q = $dbs->query("SELECT topic_id FROM mst_topic WHERE topic='".$str_subject."' AND topic_type='".$str_subject_type."'");
+    if ($_q && $_q->num_rows > 0) {
         $_d = $_q->fetch_row();
         // return the subject/topic ID
         return $_d[0];
@@ -69,130 +72,139 @@ function checkSubject($str_subject, $str_subject_type = 't')
 
 if (isset($_POST['relatedterm']) AND (isset($_POST['topicID']) OR isset($_POST['search_str']))) {
   
-  $relatedterm = trim($dbs->escape_string(strip_tags($_POST['relatedterm'])));
-  $search_str = trim($dbs->escape_string(strip_tags($_POST['search_str'])));
+    $relatedterm = trim($dbs->real_escape_string(strip_tags($_POST['relatedterm'])));
+    $search_str = trim($dbs->real_escape_string(strip_tags($_POST['search_str'])));
 
-  # create new sql op object
-  $sql_op = new simbio_dbop($dbs);
+    # create new sql op object
+    $sql_op = new simbio_dbop($dbs);
 
-  # curent item_id/topicID
-  $itemID = (integer)isset($_GET['itemID'])?$_GET['itemID']:0;
-  $vocID = (integer)isset($_GET['vocID'])?$_GET['vocID']:0;
+    # curent item_id/topicID
+    $itemID = (integer)isset($_GET['itemID'])?$_GET['itemID']:0;
+    $vocID = (integer)isset($_GET['vocID'])?$_GET['vocID']:0;
 
-  # alert sucsess add
-  $alert_add  = '<script type="text/javascript">';
-  $alert_add .= 'alert(\''.__('Vocabulary added!').'\');';
-  $alert_add .= 'parent.setIframeContent(\'itemIframe\', \''.MWB.'master_file/iframe_vocabolary_control.php?itemID='.$itemID.'\');';
-  $alert_add .= '</script>';
+    # alert sucsess add
+    $alert_add  = '<script type="text/javascript">';
+    $alert_add .= 'alert(\''.__('Vocabulary added!').'\');';
+    $alert_add .= 'parent.setIframeContent(\'itemIframe\', \''.MWB.'master_file/iframe_vocabolary_control.php?itemID='.$itemID.'\');';
+    $alert_add .= '</script>';
 
-  $data['topic_id'] = $itemID;
-  $data['rt_id'] = $relatedterm;
+    $data['topic_id'] = $itemID;
+    $data['rt_id'] = $relatedterm;
 
-  if (!empty($_POST['topicID'])) { # a.
-    $data['related_topic_id'] = $_POST['topicID'];
-  } else if ($search_str AND empty($_POST['topicID'])) {
-    // check subject
-    $subject_id = checkSubject($search_str);
-    if ($subject_id !== false) {
-        $data['related_topic_id'] = $subject_id;
-    } else {
-        // adding new topic
-        $topic_data['topic'] = $search_str;
-        $topic_data['classification'] = $_POST['topicClass'];
-        $topic_data['topic_type'] = 't';
-        $topic_data['input_date'] = date('Y-m-d');
-        $topic_data['last_update'] = date('Y-m-d');
-        // insert new topic to topic master table
-        $sql_op->insert('mst_topic', $topic_data);
-        // put last inserted ID
-        $data['related_topic_id'] = $sql_op->insert_id;
-    }
-  }
-
-  // data secondary vocabulary
-  $_data['topic_id'] = $data['related_topic_id'];
-  $_data['related_topic_id'] = $itemID;
-
-  $_data['rt_id'] = false;
-
-  if ($relatedterm === 'U') {
-    $_data['rt_id'] = 'UF';
-  }
-  if($relatedterm === 'UF'){
-    $_data['rt_id'] = 'U';
-  }
-  if ($relatedterm === 'RT') {
-    $_data['rt_id'] = 'RT';
-  }
-  if($relatedterm === 'BT'){
-    $_data['rt_id'] = 'NT';
-  }
-  if($relatedterm === 'NT'){
-    $_data['rt_id'] = 'BT';
-  }
-
-  // update mode
-  if (isset($_POST['saveData'])) {
-    $update = $sql_op->update('mst_voc_ctrl', $data, 'vocabolary_id='.$vocID);
-    if ($update) {
-      $alert_update  = '<script type="text/javascript">';
-      $alert_update .= 'alert(\''.__('Vocabulary update!').'\');';
-      $alert_update .= 'parent.setIframeContent(\'itemIframe\', \''.MWB.'master_file/iframe_vocabolary_control.php?itemID='.$itemID.'\');';
-      $alert_update .= 'top.jQuery.colorbox.close();';
-      $alert_update .= '</script>';
-
-      echo $alert_update;
-    } else {
-      toastr(__('Subject FAILED to Add. Please Contact System Administrator')."\n".$sql_op->error)->error();
-    }
-    
-  } else {
-
-    // checking if already added
-    $check_vc = $dbs->query('SELECT count(topic_id) FROM mst_voc_ctrl WHERE topic_id='.$data['topic_id'].' AND related_topic_id='.$data['related_topic_id']);
-    $check_dc = $check_vc->fetch_row();
-    if ($check_dc[0] > 0) {
-      // already add
-      toastr(__('Subject ALREADY Added in Relation!'))->success();
-    } else {
-      // insert primary vocabolary
-      if ($sql_op->insert('mst_voc_ctrl', $data)) {
-
-        // insert secondary vocabolary
-        if ($_data['rt_id']) {
-
-          // insert related topic into vocabolary control
-          $insert = $sql_op->insert('mst_voc_ctrl', $_data);
-          if ($insert) {
-            echo $alert_add;
-          }else{
-            toastr(__('Subject FAILED to Add. Please Contact System Administrator')."\n".$sql_op->error)->error();
-          }
-
-        }else{
-          echo $alert_add;
+    if (!empty($_POST['topicID'])) { # a.
+        $data['related_topic_id'] = (integer)$_POST['topicID'];
+    } else if ($search_str AND empty($_POST['topicID'])) {
+        // check subject
+        $subject_id = checkSubject($search_str);
+        if ($subject_id !== false) {
+            $data['related_topic_id'] = $subject_id;
+        } else {
+            // adding new topic
+            $topic_data['topic'] = $search_str;
+            $topic_data['classification'] = $dbs->real_escape_string($_POST['topicClass']);
+            $topic_data['topic_type'] = 't';
+            $topic_data['input_date'] = date('Y-m-d');
+            $topic_data['last_update'] = date('Y-m-d');
+            // insert new topic to topic master table
+            $sql_op->insert('mst_topic', $topic_data);
+            // put last inserted ID
+            $data['related_topic_id'] = $sql_op->insert_id;
         }
-
-      } else {
-        toastr(__('Subject FAILED to Add. Please Contact System Administrator')."\n".$sql_op->error)->error();
-      }
     }
 
-  }
+    // data secondary vocabulary
+    $_data['topic_id'] = (integer)$data['related_topic_id'];
+    $_data['related_topic_id'] = $itemID;
+
+    $_data['rt_id'] = false;
+
+    if ($relatedterm === 'U') {
+        $_data['rt_id'] = 'UF';
+    }
+    if($relatedterm === 'UF'){
+        $_data['rt_id'] = 'U';
+    }
+    if ($relatedterm === 'RT') {
+        $_data['rt_id'] = 'RT';
+    }
+    if($relatedterm === 'BT'){
+        $_data['rt_id'] = 'NT';
+    }
+    if($relatedterm === 'NT'){
+        $_data['rt_id'] = 'BT';
+    }
+
+    // update mode
+    if (isset($_POST['saveData'])) {
+        $update = $sql_op->update('mst_voc_ctrl', $data, 'vocabolary_id=' . $dbs->real_escape_string($vocID));
+        if ($update) {
+            $alert_update  = '<script type="text/javascript">';
+            $alert_update .= 'alert(\''.__('Vocabulary update!').'\');';
+            $alert_update .= 'parent.setIframeContent(\'itemIframe\', \''.MWB.'master_file/iframe_vocabolary_control.php?itemID='.$itemID.'\');';
+            $alert_update .= 'top.jQuery.colorbox.close();';
+            $alert_update .= '</script>';
+            echo $alert_update;
+        } else {
+            toastr(__('Subject FAILED to Add. Please Contact System Administrator')."\n".$sql_op->error)->error();
+        }
+    } else {
+        // checking if already added
+        $check_vc = $dbs->query('SELECT count(topic_id) FROM mst_voc_ctrl WHERE topic_id=' . $dbs->real_escape_string($data['topic_id']) . ' AND related_topic_id=' . $dbs->real_escape_string($data['related_topic_id']));
+        $check_dc = $check_vc ? $check_vc->fetch_row() : array(0);
+
+        if ($check_dc[0] > 0) {
+            // already add
+            toastr(__('Subject ALREADY Added in Relation!'))->success();
+        } else {
+            // insert primary vocabolary
+            if ($sql_op->insert('mst_voc_ctrl', $data)) {
+                // insert secondary vocabolary
+                if ($_data['rt_id']) {
+                    // insert related topic into vocabolary control
+                    $insert = $sql_op->insert('mst_voc_ctrl', $_data);
+                    if ($insert) {
+                        echo $alert_add;
+                    } else {
+                        toastr(__('Subject FAILED to Add. Please Contact System Administrator')."\n".$sql_op->error)->error();
+                    }
+                } else {
+                    echo $alert_add;
+                }
+            } else {
+                toastr(__('Subject FAILED to Add. Please Contact System Administrator')."\n".$sql_op->error)->error();
+            }
+        }
+    }
 }
+
 if (isset($_GET['editTopic'])) {
-  if (!($can_read AND $can_write)) {
+    if (!($can_read AND $can_write)) {
         die('<div class="errorBox">'.__('You don\'t have enough privileges to access this area!').'</div>');
     }
-  // record form
-  $itemID = (integer)isset($_GET['itemID'])?$_GET['itemID']:0;
-  $vocID = (integer)isset($_GET['vocID'])?$_GET['vocID']:0;
-  $rec_q = $dbs->query('SELECT * FROM mst_voc_ctrl WHERE vocabolary_id='.$vocID.' AND topic_id='.$itemID);
-  $rec_d = $rec_q->fetch_assoc();
+    // record form
+    $itemID = (integer)isset($_GET['itemID'])?$_GET['itemID']:0;
+    $vocID = (integer)isset($_GET['vocID'])?$_GET['vocID']:0;
+    $rec_q = $dbs->query('SELECT * FROM mst_voc_ctrl WHERE vocabolary_id=' . $dbs->real_escape_string($vocID) . ' AND topic_id=' . $dbs->real_escape_string($itemID));
+    $rec_d = $rec_q->fetch_assoc();
+    $topic_name = '';
+    $topic_class = '';
+    $related_topic_id = 0;
 
-  $topic_q = $dbs->query('SELECT topic, classification FROM mst_topic WHERE topic_id='.$rec_d['related_topic_id']);
-  $topic_d = $topic_q->fetch_row();
+    if ($rec_d && $rec_d['related_topic_id']) {
+        $related_topic_id = (integer)$rec_d['related_topic_id'];
+    }
 
+    if ($related_topic_id > 0) {
+        $topic_q = $dbs->query('SELECT topic, classification FROM mst_topic WHERE topic_id=' . $dbs->real_escape_string($related_topic_id));
+        $topic_d = $topic_q ? $topic_q->fetch_row() : null;
+    } else {
+        $topic_d = null;
+    }
+
+    if ($topic_d) {
+        $topic_name = $topic_d[0];
+        $topic_class = $topic_d[1];
+    }
 
 // edit mode
   ?>
@@ -222,14 +234,14 @@ if (isset($_GET['editTopic'])) {
       <?php
       $ajax_exp = "ajaxFillSelect('../../AJAX_lookup_handler.php', 'mst_topic', 'topic_id:topic:topic_type', 'topicID', $('#search_str').val())";
       ?>
-      <input type="text" value="<?php echo $topic_d[0];?>" name="search_str" id="search_str" class="form-control" placeholder="Vocabulary" oninput="<?php echo $ajax_exp; ?>" />
+      <input type="text" value="<?php echo $topic_name;?>" name="search_str" id="search_str" class="form-control" placeholder="Vocabulary" oninput="<?php echo $ajax_exp; ?>" />
       <select name="topicID" id="topicID" size="5" class="form-control"><option value="0"><?php echo __('Type to search for existing topics or to add a new one'); ?></option></select>
       </div>
     </div>
     <div class="form-group">
     <label for="subname" class="col-xs-2 control-label"><?php echo __('Classification'); ?></label>
     <div class="col-xs-10">
-      <input type="text" name="topicClass" class="form-control" value="<?php echo $topic_d[1]; ?>">
+      <input type="text" name="topicClass" class="form-control" value="<?php echo $topic_class; ?>">
     </div>
   </div>
     <div class="form-group">

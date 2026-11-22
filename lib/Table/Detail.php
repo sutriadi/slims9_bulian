@@ -3,12 +3,15 @@
  * @author Drajat Hasan
  * @email drajathasan20@gmail.com
  * @create date 2022-12-20 09:41:31
- * @modify date 2022-12-21 08:47:25
+ * @modify date 2023-01-23 11:56:13
  * @license GPLv3
  * @desc [description]
  */
 
 namespace SLiMS\Table;
+
+use PDO;
+use SLiMS\DB;
 
 trait Detail
 {
@@ -59,8 +62,9 @@ trait Detail
         self::getInstance();
 
         // Create table state
-        $tableState = self::$connection->prepare('SELECT * FROM `TABLES` WHERE `TABLE_SCHEMA` = :database_name AND `TABLE_NAME` = :table_name');
-        $tableState->execute(['database_name' => self::$connectionProfile['database'], 'table_name' => $tableName]);
+        $credential = DB::getCredential(self::$connectionName);
+        $tableState = self::$connection->prepare('SELECT * FROM `INFORMATION_SCHEMA`.`TABLES` WHERE `TABLE_SCHEMA` = :database_name AND `TABLE_NAME` = :table_name');
+        $tableState->execute(['database_name' => ($credential['database']??$credential['name']), 'table_name' => $tableName]);
 
         return $tableState;
     }
@@ -76,8 +80,9 @@ trait Detail
         self::getInstance();
 
         // Create table state
-        $tableState = self::$connection->prepare('SELECT * FROM `COLUMNS` WHERE `TABLE_SCHEMA` = :database_name AND `TABLE_NAME` = :table_name AND `COLUMN_NAME` = :column_name');
-        $tableState->execute(['database_name' => self::$connectionProfile['database'], 'table_name' => $tableName, ':column_name' => $columnName]);
+        $credential = DB::getCredential(self::$connectionName);
+        $tableState = self::$connection->prepare('SELECT * FROM `INFORMATION_SCHEMA`.`COLUMNS` WHERE `TABLE_SCHEMA` = :database_name AND `TABLE_NAME` = :table_name AND `COLUMN_NAME` = :column_name');
+        $tableState->execute(['database_name' => ($credential['database']??$credential['name']), 'table_name' => $tableName, ':column_name' => $columnName]);
 
         return $tableState;
     }
@@ -93,8 +98,9 @@ trait Detail
         self::getInstance();
 
         // Create table state
-        $tableState = self::$connection->prepare('SELECT * FROM `COLUMNS` WHERE `TABLE_SCHEMA` = :database_name AND `TABLE_NAME` = :table_name');
-        $tableState->execute(['database_name' => self::$connectionProfile['database'], 'table_name' => $tableName,]);
+        $credential = DB::getCredential(self::$connectionName);
+        $tableState = self::$connection->prepare('SELECT * FROM `INFORMATION_SCHEMA`.`COLUMNS` WHERE `TABLE_SCHEMA` = :database_name AND `TABLE_NAME` = :table_name');
+        $tableState->execute(['database_name' => ($credential['database']??$credential['name']), 'table_name' => $tableName,]);
         
         $data = [];
         while ($result = $tableState->fetch(\PDO::FETCH_ASSOC)) {
@@ -150,6 +156,28 @@ trait Detail
     public function columns(bool $fetchAll = false)
     {
         return !empty($this->table) ? $this->getTableColumn($this->table, $fetchAll) : [];
+    }
+
+    /**
+     * Get all table data from current database
+     *
+     * @return array
+     */
+    public static function tables()
+    {
+        // set database instance
+        self::getInstance();
+
+        // Create table state
+        $tableState = self::$connection->prepare('SELECT `TABLE_NAME` FROM `INFORMATION_SCHEMA`.`TABLES` WHERE `TABLE_SCHEMA` = :database_name');
+        $tableState->execute(['database_name' => self::$connectionProfile['database']]);
+
+        $table = [];
+        while ($data = $tableState->fetch(PDO::FETCH_ASSOC)) {
+            $table[] = $data['TABLE_NAME'];
+        }
+
+        return $table;
     }
 
     /**
@@ -219,30 +247,5 @@ trait Detail
     {
         if (!empty($this->column)) return !is_null($this->getType());
         else return (bool)$this->getTableDetail($this->table)->rowCount();
-    }
-
-    /**
-     * Magic method to call data via scoped property
-     *
-     * @param [type] $method
-     * @param [type] $arguments
-     * @return string
-     */
-    public function __call($method, $arguments)
-    {
-        $escapeMethod = strtolower(str_replace('get', '', $method));
-        
-        if (isset($this->detailTableScope[$escapeMethod]) && empty($this->column) && !empty($this->table)) 
-        {
-            $data = $this->getTableDetail($this->table)->fetchObject();
-            $column = $this->detailTableScope[$escapeMethod];
-            return $data && property_exists($data, $column) ? $data->{$column} : null;
-        }
-        else if (!empty($this->column) && !empty($this->table))
-        {
-            $data = $this->getColumnDetail($this->table, $this->column)->fetchObject();
-            $column = $this->detailColumnScope[$escapeMethod];
-            return $data && property_exists($data, $column) ? $data->{$column} : null;
-        }
     }
 }

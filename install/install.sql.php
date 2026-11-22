@@ -29,7 +29,7 @@ $sql['create'][] = 'CREATE TABLE IF NOT EXISTS `biblio` (
   `series_title` varchar(200) collate utf8_unicode_ci default NULL,
   `call_number` varchar(50) collate utf8_unicode_ci default NULL,
   `language_id` char(5) collate utf8_unicode_ci default \'en\',
-  `source` varchar(3) collate utf8_unicode_ci default NULL,
+  `source` varchar(10) collate utf8_unicode_ci default NULL,
   `publish_place_id` int(11) default NULL,
   `classification` varchar(40) collate utf8_unicode_ci default NULL,
   `notes` text collate utf8_unicode_ci,
@@ -52,6 +52,7 @@ $sql['create'][] = 'CREATE TABLE IF NOT EXISTS `biblio` (
   KEY `biblio_flag_idx` (`opac_hide`,`promoted`),
   KEY `rda_idx` (`content_type_id`, `media_type_id`, `carrier_type_id`),
   KEY `uid` (`uid`),
+  KEY `publisher_id` (`publisher_id`),
   FULLTEXT KEY `title_ft_idx` (`title`,`series_title`),
   FULLTEXT KEY `notes_ft_idx` (`notes`),
   FULLTEXT KEY `labels` (`labels`)
@@ -218,6 +219,12 @@ CREATE TABLE IF NOT EXISTS `item` (
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci AUTO_INCREMENT=1 ;";
 
 $sql['create'][] = "
+  CREATE TABLE IF NOT EXISTS `item_custom` (
+    `item_id` INT NOT NULL ,
+    PRIMARY KEY ( `item_id` )
+  ) ENGINE=MyISAM COMMENT = 'one to one relation with real item table';";
+
+$sql['create'][] = "
 CREATE TABLE IF NOT EXISTS `kardex` (
   `kardex_id` int(11) NOT NULL auto_increment,
   `date_expected` date NOT NULL,
@@ -277,7 +284,7 @@ CREATE TABLE IF NOT EXISTS `member` (
   `is_pending` smallint(1) NOT NULL default '0',
   `mpasswd` VARCHAR(64) NULL,
   `last_login` DATETIME NULL,
-  `last_login_ip` VARCHAR(20) NULL,
+  `last_login_ip` VARCHAR(50) NULL,
   `input_date` date default NULL,
   `last_update` date default NULL,
   PRIMARY KEY  (`member_id`),
@@ -398,8 +405,8 @@ CREATE TABLE IF NOT EXISTS `mst_item_status` (
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;";
 
 $sql['insert'][] = 'INSERT INTO `mst_item_status` (`item_status_id`, `item_status_name`, `rules`, `input_date`, `last_update`, `no_loan`, `skip_stock_take`) VALUES
-(\'R\', \'Repair\', \'a:1:{i:0;s:1:"1";}\', DATE(NOW()), DATE(NOW()), \'1\', \'0\'),
-(\'NL\', \'No Loan\', \'a:1:{i:0;s:1:"1";}\', DATE(NOW()), DATE(NOW()), \'1\', \'0\'),
+(\'R\', \'Repair\', \'a:1:{i:0;s:1:"1";}\', DATE(NOW()), DATE(NOW()), \'1\', \'1\'),
+(\'NL\', \'No Loan\', \'a:1:{i:0;s:1:"1";}\', DATE(NOW()), DATE(NOW()), \'1\', \'1\'),
 (\'MIS\', \'Missing\', NULL, DATE(NOW()), DATE(NOW()), \'1\', \'1\');';
 
 $sql['create'][] = "
@@ -634,7 +641,7 @@ $sql['insert'][] = "INSERT IGNORE INTO `setting` (`setting_id`, `setting_name`, 
 (17, 'ignore_holidays_fine_calc', 'b:0;'),
 (18, 'barcode_print_settings', 'a:12:{s:19:\"barcode_page_margin\";d:0.200000000000000011102230246251565404236316680908203125;s:21:\"barcode_items_per_row\";i:3;s:20:\"barcode_items_margin\";d:0.1000000000000000055511151231257827021181583404541015625;s:17:\"barcode_box_width\";i:7;s:18:\"barcode_box_height\";i:5;s:27:\"barcode_include_header_text\";i:1;s:17:\"barcode_cut_title\";i:50;s:19:\"barcode_header_text\";s:0:\"\";s:13:\"barcode_fonts\";s:41:\"Arial, Verdana, Helvetica, ''Trebuchet MS''\";s:17:\"barcode_font_size\";i:11;s:13:\"barcode_scale\";i:70;s:19:\"barcode_border_size\";i:1;}'),
 (19, 'label_print_settings', 'a:10:{s:11:\"page_margin\";d:0.200000000000000011102230246251565404236316680908203125;s:13:\"items_per_row\";i:3;s:12:\"items_margin\";d:0.05000000000000000277555756156289135105907917022705078125;s:9:\"box_width\";i:8;s:10:\"box_height\";d:3.29999999999999982236431605997495353221893310546875;s:19:\"include_header_text\";i:1;s:11:\"header_text\";s:0:\"\";s:5:\"fonts\";s:41:\"Arial, Verdana, Helvetica, ''Trebuchet MS''\";s:9:\"font_size\";i:11;s:11:\"border_size\";i:1;}'),
-(20, 'membercard_print_settings', 'a:1:{s:5:\"print\";a:1:{s:10:\"membercard\";a:61:{s:11:\"card_factor\";s:12:\"37.795275591\";s:21:\"card_include_id_label\";i:1;s:23:\"card_include_name_label\";i:1;s:22:\"card_include_pin_label\";i:1;s:23:\"card_include_inst_label\";i:0;s:24:\"card_include_email_label\";i:0;s:26:\"card_include_address_label\";i:1;s:26:\"card_include_barcode_label\";i:1;s:26:\"card_include_expired_label\";i:1;s:14:\"card_box_width\";d:8.5999999999999996447286321199499070644378662109375;s:15:\"card_box_height\";d:5.4000000000000003552713678800500929355621337890625;s:9:\"card_logo\";s:8:\"logo.png\";s:21:\"card_front_logo_width\";s:0:\"\";s:22:\"card_front_logo_height\";s:0:\"\";s:20:\"card_front_logo_left\";s:0:\"\";s:19:\"card_front_logo_top\";s:0:\"\";s:20:\"card_back_logo_width\";s:0:\"\";s:21:\"card_back_logo_height\";s:0:\"\";s:19:\"card_back_logo_left\";s:0:\"\";s:18:\"card_back_logo_top\";s:0:\"\";s:15:\"card_photo_left\";s:0:\"\";s:14:\"card_photo_top\";s:0:\"\";s:16:\"card_photo_width\";d:1.5;s:17:\"card_photo_height\";d:1.8000000000000000444089209850062616169452667236328125;s:23:\"card_front_header1_text\";s:19:\"Library Member Card\";s:28:\"card_front_header1_font_size\";s:2:\"12\";s:23:\"card_front_header2_text\";s:10:\"My Library\";s:28:\"card_front_header2_font_size\";s:2:\"12\";s:22:\"card_back_header1_text\";s:10:\"My Library\";s:27:\"card_back_header1_font_size\";s:2:\"12\";s:22:\"card_back_header2_text\";s:35:\"My Library Full Address and Website\";s:27:\"card_back_header2_font_size\";s:1:\"5\";s:17:\"card_header_color\";s:7:\"#0066FF\";s:18:\"card_bio_font_size\";s:2:\"11\";s:20:\"card_bio_font_weight\";s:4:\"bold\";s:20:\"card_bio_label_width\";s:3:\"100\";s:9:\"card_city\";s:9:\"City Name\";s:10:\"card_title\";s:15:\"Library Manager\";s:14:\"card_officials\";s:14:\"Librarian Name\";s:17:\"card_officials_id\";s:12:\"Librarian ID\";s:15:\"card_stamp_file\";s:9:\"stamp.png\";s:19:\"card_signature_file\";s:13:\"signature.png\";s:15:\"card_stamp_left\";s:0:\"\";s:14:\"card_stamp_top\";s:0:\"\";s:16:\"card_stamp_width\";s:0:\"\";s:17:\"card_stamp_height\";s:0:\"\";s:13:\"card_exp_left\";s:0:\"\";s:12:\"card_exp_top\";s:0:\"\";s:14:\"card_exp_width\";s:0:\"\";s:15:\"card_exp_height\";s:0:\"\";s:18:\"card_barcode_scale\";i:100;s:17:\"card_barcode_left\";s:0:\"\";s:16:\"card_barcode_top\";s:0:\"\";s:18:\"card_barcode_width\";s:0:\"\";s:19:\"card_barcode_height\";s:0:\"\";s:10:\"card_rules\";s:120:\"<ul><li>This card is published by Library.</li><li>Please return this card to its owner if you found it.</li></ul>\";s:20:\"card_rules_font_size\";s:1:\"8\";s:12:\"card_address\";s:76:\"My Library<br />website: http://slims.web.id, email : librarian@slims.web.id\";s:22:\"card_address_font_size\";s:1:\"7\";s:17:\"card_address_left\";s:0:\"\";s:16:\"card_address_top\";s:0:\"\";}}}')
+(20, 'membercard_print_settings', 'a:19:{s:18:\"front_header1_text\";s:19:\"Library Member Card\";s:18:\"front_header2_text\";s:10:\"My Library\";s:17:\"back_header1_text\";s:10:\"My Library\";s:17:\"back_header2_text\";s:35:\"My Library Full Address and Website\";s:9:\"box_width\";s:3:\"8.6\";s:10:\"box_height\";s:3:\"5.4\";s:6:\"factor\";s:12:\"37.795275591\";s:13:\"barcode_scale\";s:3:\"100\";s:5:\"rules\";s:150:\"&lt;ul&gt;&lt;li&gt;This card is published by Library.&lt;/li&gt;&lt;li&gt;Please return this card to its owner if you found it.&lt;/li&gt;&lt;/ul&gt;\";s:7:\"f_color\";s:7:\"#000000\";s:8:\"fr_color\";s:7:\"#e5e5e5\";s:7:\"b_color\";s:7:\"#ffffff\";s:4:\"city\";s:9:\"City Name\";s:5:\"title\";s:15:\"Library Manager\";s:9:\"officials\";s:14:\"Librarian Name\";s:12:\"officials_id\";s:12:\"Librarian ID\";s:15:\"back_side_image\";s:11:\"bg-back.svg\";s:3:\"css\";s:0:\"\";s:8:\"template\";s:7:\"classic\";}')
 ;";
 
 $sql['create'][] = "
@@ -695,12 +702,13 @@ CREATE TABLE IF NOT EXISTS `user` (
   `username` varchar(50) COLLATE utf8_unicode_ci NOT NULL,
   `realname` varchar(100) COLLATE utf8_unicode_ci NOT NULL,
   `passwd` varchar(64) COLLATE utf8_unicode_ci NOT NULL,
+  `2fa` text COLLATE utf8_unicode_ci DEFAULT NULL,
   `email` varchar(200) COLLATE utf8_unicode_ci DEFAULT NULL,
   `user_type` smallint(2) DEFAULT NULL,
   `user_image` varchar(250) COLLATE utf8_unicode_ci DEFAULT NULL,
   `social_media` text COLLATE utf8_unicode_ci NULL,
   `last_login` datetime DEFAULT NULL,
-  `last_login_ip` char(15) COLLATE utf8_unicode_ci DEFAULT NULL,
+  `last_login_ip` varchar(50) COLLATE utf8_unicode_ci DEFAULT NULL,
   `groups` varchar(200) COLLATE utf8_unicode_ci DEFAULT NULL,
   `admin_template` text COLLATE utf8_unicode_ci DEFAULT NULL,
   `forgot` VARCHAR(80) COLLATE utf8_unicode_ci DEFAULT NULL,
@@ -734,16 +742,18 @@ CREATE TABLE IF NOT EXISTS `visitor_count` (
   `member_id` varchar(20) COLLATE utf8_unicode_ci DEFAULT NULL,
   `member_name` varchar(255) COLLATE utf8_unicode_ci NOT NULL,
   `institution` varchar(100) COLLATE utf8_unicode_ci DEFAULT NULL,
+  `room_code` varchar(5) COLLATE utf8_unicode_ci DEFAULT NULL,
   `checkin_date` datetime NOT NULL,
   PRIMARY KEY (`visitor_id`),
-  KEY `member_id` (`member_id`)
+  KEY `member_id` (`member_id`),
+  KEY `room_code` (`room_code`)
 ) ENGINE=MyISAM  DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;";
 
 $sql['create'][] = "
 CREATE TABLE IF NOT EXISTS `biblio_custom` (
 `biblio_id` INT NOT NULL ,
 PRIMARY KEY ( `biblio_id` )
-) ENGINE = MYISAM COMMENT = 'one to one relation with real biblio table';";
+) ENGINE=MyISAM COMMENT = 'one to one relation with real biblio table';";
 
 $sql['create'][] = "
 CREATE TABLE IF NOT EXISTS `search_biblio` (
@@ -792,7 +802,7 @@ CREATE TABLE IF NOT EXISTS `search_biblio` (
 $sql['create'][] = "CREATE TABLE IF NOT EXISTS `member_custom` (
 `member_id` VARCHAR(20) NOT NULL ,
 PRIMARY KEY ( `member_id` )
-) ENGINE = MYISAM COMMENT = 'one to one relation with real member table';";
+) ENGINE=MyISAM COMMENT = 'one to one relation with real member table';";
 
 $sql['create'][] = "
 CREATE TABLE IF NOT EXISTS `comment` (
@@ -1093,10 +1103,10 @@ CREATE TABLE IF NOT EXISTS `plugins` (
 
 $sql['create'][] = "CREATE TABLE IF NOT EXISTS `index_words` (
   `id` bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  `word` varchar(50) COLLATE 'utf8mb4_unicode_ci' NOT NULL,
+  `word` varchar(255) COLLATE 'utf8mb4_unicode_ci' NOT NULL,
   `num_hits` int NOT NULL,
   `doc_hits` int NOT NULL
-) ENGINE='MyISAM' COLLATE 'utf8mb4_unicode_ci';";
+) ENGINE=MyISAM COLLATE 'utf8mb4_unicode_ci';";
 
 $sql['create'][] = "CREATE TABLE IF NOT EXISTS `index_documents` (
   `document_id` int(11) NOT NULL,
@@ -1119,41 +1129,32 @@ $sql['create'][] = "CREATE TABLE IF NOT EXISTS `biblio_mark` (
   KEY `biblio_id_idx` (`biblio_id`)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
-$query_trigger[] = "
-    CREATE TRIGGER `delete_loan_history` AFTER DELETE ON `loan`
-     FOR EACH ROW DELETE FROM `loan_history` WHERE loan_id=OLD.loan_id;";
+$sql['create'][] = "CREATE TABLE IF NOT EXISTS `mst_visitor_room` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(50) NOT NULL,
+  `unique_code` varchar(5) NOT NULL COMMENT 'Code for identification each room',
+  `created_at` datetime DEFAULT NULL,
+  `updated_at`datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unique_code_unq` (`unique_code`),
+  KEY `unique_code_idx` (`unique_code`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
-$query_trigger[] = "
-    CREATE TRIGGER `update_loan_history` AFTER UPDATE ON `loan`
-     FOR EACH ROW UPDATE loan_history 
-    SET is_lent=NEW.is_lent,
-    is_return=NEW.is_return,
-    renewed=NEW.renewed,
-    return_date=NEW.return_date
-    WHERE loan_id=NEW.loan_id;";
+$sql['create'][] = "CREATE TABLE IF NOT EXISTS `cache` (
+  `name` varchar(64) NOT NULL,
+  `contents` text NOT NULL,
+  `created_at` datetime NOT NULL,
+  `updated_at` datetime NOT NULL,
+  `expired_at` datetime DEFAULT NULL,
+  UNIQUE KEY `name` (`name`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
-$query_trigger[] = "
-    CREATE TRIGGER `insert_loan_history` AFTER INSERT ON `loan`
-     FOR EACH ROW INSERT INTO loan_history
-     SET loan_id=NEW.loan_id,
-     item_code=NEW.item_code,
-     member_id=NEW.member_id,
-     loan_date=NEW.loan_date,
-     due_date=NEW.due_date,
-     renewed=NEW.renewed,
-     is_lent=NEW.is_lent,
-     is_return=NEW.is_return,
-     return_date=NEW.return_date,
-     input_date=NEW.input_date,
-     last_update=NEW.last_update,
-     title=(SELECT b.title FROM biblio b LEFT JOIN item i ON i.biblio_id=b.biblio_id WHERE i.item_code=NEW.item_code),
-     biblio_id=(SELECT b.biblio_id FROM biblio b LEFT JOIN item i ON i.biblio_id=b.biblio_id WHERE i.item_code=NEW.item_code),
-     call_number=(SELECT IF(i.call_number IS NULL, b.call_number,i.call_number) FROM biblio b LEFT JOIN item i ON i.biblio_id=b.biblio_id WHERE i.item_code=NEW.item_code),
-     classification=(SELECT b.classification FROM biblio b LEFT JOIN item i ON i.biblio_id=b.biblio_id WHERE i.item_code=NEW.item_code),
-     gmd_name=(SELECT g.gmd_name FROM biblio b LEFT JOIN item i ON i.biblio_id=b.biblio_id LEFT JOIN mst_gmd g ON g.gmd_id=b.gmd_id WHERE i.item_code=NEW.item_code),
-     language_name=(SELECT l.language_name FROM biblio b LEFT JOIN item i ON i.biblio_id=b.biblio_id LEFT JOIN mst_language l ON b.language_id=l.language_id WHERE i.item_code=NEW.item_code),
-     location_name=(SELECT ml.location_name FROM item i LEFT JOIN mst_location ml ON i.location_id=ml.location_id WHERE i.item_code=NEW.item_code),
-     collection_type_name=(SELECT mct.coll_type_name FROM mst_coll_type mct LEFT JOIN item i ON i.coll_type_id=mct.coll_type_id WHERE i.item_code=NEW.item_code),
-     member_name=(SELECT m.member_name FROM member m WHERE m.member_id=NEW.member_id),
-     member_type_name=(SELECT mmt.member_type_name FROM mst_member_type mmt LEFT JOIN member m ON m.member_type_id=mmt.member_type_id WHERE m.member_id=NEW.member_id);";
-
+$sql['create'][] = "CREATE TABLE `user_tokens` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `selector` varchar(255) NOT NULL,
+  `hashed_validator` varchar(255) NOT NULL,
+  `user_id` int NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `created_at` datetime NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";

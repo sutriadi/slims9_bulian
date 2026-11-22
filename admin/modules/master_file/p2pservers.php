@@ -9,6 +9,8 @@
 
 /* P2P/Copy Cataloging Server Management section */
 
+use SLiMS\Url;
+
 // key to authenticate
 define('INDEX_AUTH', '1');
 // key to get full database access
@@ -41,8 +43,10 @@ if (!$can_read) {
     die('<div class="errorBox">'.__('You don\'t have enough privileges to view this section').'</div>');
 }
 
-$serverType = array(array(1,'P2P Server'), array(2,'z3950 server'), array(3,'z3950 SRU server'), array(4,'MARC SRU server'));
-$lookupType = array(1=>'P2P Server', 2=>'z3950 server', 3=>'z3950 SRU server', 4=>'MARC SRU server');
+$serverType = array_map(function($index) {
+    global $sysconf;
+    return [$index, $sysconf['p2pserver_type'][$index]];
+}, array_keys($sysconf['p2pserver_type']));
 
 if (isset($_POST['saveData']) AND $can_read AND $can_write) {
   $server_name = trim(strip_tags($_POST['serverName']));
@@ -53,6 +57,7 @@ if (isset($_POST['saveData']) AND $can_read AND $can_write) {
       exit();
     } else {
       $data['name'] = $dbs->escape_string($server_name);
+      if (!Url::isValid($server_uri)) exit(toastr(__('URI isn\'t valid, start witch prefix like e.g: http://, https:// etc.'))->error());
       $data['uri'] = $dbs->escape_string($server_uri);
       $data['server_type'] = $dbs->escape_string($_POST['serverType']);
       $data['input_date'] = date('Y-m-d H:i:s');
@@ -212,8 +217,8 @@ if (isset($_POST['detail']) OR (isset($_GET['action']) AND $_GET['action'] == 'd
   // callback function to change value of authority type
   function callbackServerType($obj_db, $rec_d)
   {
-      global $sysconf, $lookupType;
-	  return $lookupType[$rec_d[3]];
+      global $sysconf;
+	  return $sysconf['p2pserver_type'][$rec_d[3]];
   }
   // modify column content
   $datagrid->modifyColumnContent(3, 'callback{callbackServerType}');

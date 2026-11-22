@@ -68,6 +68,8 @@ if (isset($_POST['confirmFinish'])) {
     if (isset($_POST['purge']) AND !empty($_POST['purge'])) {
       // purge data in item table
       $purge_item_q = $dbs->query('DELETE FROM item WHERE item_id IN (SELECT item_id FROM stock_take_item WHERE status=\'m\')');
+      // purge data in loan_history table first (due to foreign key constraint)
+      $purge_loan_history_q = $dbs->query('DELETE FROM loan_history WHERE loan_id IN (SELECT loan_id FROM loan WHERE item_code IN (SELECT item_code FROM stock_take_item WHERE status=\'m\'))');
       // purge data in loan table
       $purge_loan_q = $dbs->query('DELETE FROM loan WHERE item_code IN (SELECT item_code FROM stock_take_item WHERE status=\'m\')');
     }
@@ -150,7 +152,7 @@ if (isset($_POST['confirmFinish'])) {
     // clean all current stock take error log
     $error_log_q = $dbs->query('DELETE FROM system_log WHERE log_location=\'stock_take\' AND log_msg LIKE \'Stock Take ERROR%\'');
     // write log
-    utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'stock_take', $_SESSION['realname'].' finish stock take ('.$stk_take_d[0].') from address '.$_SERVER['REMOTE_ADDR'], 'Finished', 'OK');
+    writeLog('staff', $_SESSION['uid'], 'stock_take', $_SESSION['realname'].' finish stock take ('.$stk_take_d[0].') from address '.$_SERVER['REMOTE_ADDR'], 'Finished', 'OK');
     // send an alert
     echo '<script type="text/javascript">';
     echo 'alert(\''.__('Stock Take Proccess Finished!').'\');';

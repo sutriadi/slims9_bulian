@@ -31,7 +31,7 @@ if (!defined('SB')) {
 }
 
 if (isset($_GET['authorID'])) {
-  $_POST['itemID'] = $_GET['authorID'];
+  $_POST['itemID'] = (integer)$_GET['authorID'];
   $_POST['detail'] = true;
 }
 
@@ -44,7 +44,7 @@ if(isset($_POST['updateData'])){
 	$query = sprintf("UPDATE biblio_author SET level=%d WHERE biblio_id=%d AND author_id=%d",$level,$biblio_id,$author_id);
 	$update = $dbs->query($query);
     if($update){
-		utility::jsAlert('Authority Level Data Successfully Updated');
+		utility::jsAlert(__('Authority Level Data Successfully Updated'));
 		echo '<script type="text/javascript">top.setIframeContent(\'authorIframe\', \''.MWB.'bibliography/iframe_author.php?biblioID='.$biblio_id.'\');</script>';
     	echo '<script type="text/javascript">top.jQuery.colorbox.close();</script>';
     }else { 
@@ -69,8 +69,8 @@ else{
 
     /* RECORD FORM */
     $itemID = (integer)isset($_POST['itemID'])?$_POST['itemID']:0;
-    $query = 'SELECT b.biblio_id,ba.author_id,b.title,ma.author_name,ma.authority_type,ba.* FROM biblio b LEFT JOIN biblio_author ba ON ba.biblio_id=ba.biblio_id
-    LEFT JOIN mst_author ma ON ma.author_id=ba.author_id WHERE b.biblio_id='.$_GET['biblio_id'].' AND ma.author_id='.$_GET['authorID'];
+    $query = sprintf('SELECT b.biblio_id,ba.author_id,b.title,ma.author_name,ma.authority_type,ba.* FROM biblio b LEFT JOIN biblio_author ba ON ba.biblio_id=ba.biblio_id
+    LEFT JOIN mst_author ma ON ma.author_id=ba.author_id WHERE b.biblio_id=%d AND ma.author_id=%d', (integer)$_GET['biblio_id'], (integer)$_GET['authorID']);
     $rec_q = $dbs->query($query);
     $rec_d = $rec_q->fetch_assoc();
 
@@ -102,7 +102,7 @@ else{
 
 $content = ob_get_clean();
 // page title
-$page_title = 'Biblio Author';
+$page_title = __('Biblio Author');
 
 // include the page template
 require SB.'/admin/'.$sysconf['admin_template']['dir'].'/notemplate_page_tpl.php';

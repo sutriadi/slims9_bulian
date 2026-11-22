@@ -19,6 +19,10 @@
  */
 
 /* Peer-to-Peer Web Services section */
+use SLiMS\Extension;
+use SLiMS\Url;
+use SLiMS\Http\Client;
+use SLiMS\Filesystems\Storage;
 
 // key to authenticate
 define('INDEX_AUTH', '1');
@@ -47,73 +51,62 @@ $can_write = utility::havePrivilege('bibliography', 'w');
 if (!$can_read) {
   die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
 }
+# CHECK ACCESS
+if ($_SESSION['uid'] != 1) {
+    if (!utility::haveAccess('bibliography.p2p-service')) {
+        die('<div class="errorBox">' . __('You are not authorized to view this section') . '</div>');
+    }
+}
 
-function downloadFile($url, $path)
+$p2pExtRequirement = [];
+if (!Extension::forFeature('p2p')->isFulfilled($p2pExtRequirement)) {
+  die('<div class="errorBox">' . (sprintf(__('Feature P2P needs some PHP extension such as %s'), implode(',', $p2pExtRequirement))) . '</div>');
+}
+
+function downloadFile($url, $storage, $path)
 {
+  $file = Client::get($url, [
+    'headers' => [
+      'User-Agent' => $_SERVER['HTTP_USER_AGENT']
+    ]
+  ]);
 
-  $fp = fopen($path, 'w+');
+  $storage->put($path, $file->getContent());
 
-  $curl = curl_init();
-
-  curl_setopt_array($curl, array(
-    CURLOPT_URL => $url,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_ENCODING => "",
-    CURLOPT_MAXREDIRS => 10,
-    CURLOPT_TIMEOUT => 30,
-    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-    CURLOPT_CUSTOMREQUEST => "GET",
-    CURLOPT_SSL_VERIFYHOST => false,
-    CURLOPT_SSL_VERIFYPEER => false,
-    CURLOPT_USERAGENT => $_SERVER['HTTP_USER_AGENT'],
-    CURLOPT_FILE => $fp
-  ));
-
-  $response = curl_exec($curl);
-  $err = curl_error($curl);
-
-  curl_close($curl);
-  fclose($fp);
-
-  if ($err) {
-    return $err;
+  if (!empty($file->getError())) {
+    return $file->getError();
   } else {
-    // file_put_contents($path, $response);
     return true;
   }
 }
 
 function cleanUrl($url)
 {
-  $_url = parse_url(trim($url));
-  // var_dump($_url);
-  $_path = preg_replace('/(\/index.php|\/)$/', '', trim($_url['path'] ?? ''));
-  $_port = isset($_url['port']) ? ':' . $_url['port'] : '';
-  return $_url['scheme'] . '://' . $_url['host'] . $_port . $_path . '/';
+  $Url = Url::parse($url);
+  
+  return $Url->getScheme() . '://' . // http or https
+         // localhost, ip, or domain       
+         $Url->getDomain() .
+         // http standart port (80 & 443) or non http standart port
+         (!is_null($Url->getPort()) ? ':' . $Url->getPort() : '') .
+         // path
+         (substr($Url->getPath(), -1) == '/' ? $Url->getPath() . '' : $Url->getPath() . '/');
 }
 
 function remoteFileExists($url) 
 {
-  $curl = curl_init($url);
-  curl_setopt($curl, CURLOPT_NOBODY, true);
-  curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
-  curl_setopt($curl, CURLOPT_SSL_VERIFYHOST,  false);
-  $result = curl_exec($curl);
-  $status = null;
-  if ($result !== false) {
-    $statusCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);  
-    if ($statusCode == 200) {
-        $status = $url;   
-    }
+  try {
+    $existation = Client::get($url);
+    return $existation->getStatusCode() == 200 ? $url : null;
+  } catch (Exception $th) {
+    return null;
   }
-  curl_close($curl);
-  return $status;
 }    
 
 // get servers
-$server_q = $dbs->query('SELECT name, uri FROM mst_servers WHERE server_type = 1 ORDER BY name ASC');
+$server_q = $dbs->query('SELECT name, uri, server_id FROM mst_servers WHERE server_type = 1 ORDER BY name ASC');
 while ($server = $server_q->fetch_assoc()) {
-  $sysconf['p2pserver'][] = array('uri' => $server['uri'], 'name' => $server['name']);
+  if (Url::isValid($server['uri'])) $sysconf['p2pserver'][] = array('id' => $server['server_id'], 'uri' => $server['uri'], 'name' => $server['name']);
 }
 
 /* RECORD OPERATION */
@@ -130,12 +123,21 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
   $input_date = date('Y-m-d H:i:s');
   // record counter
   $r = 0;
+  $error = 0;
+  $error_message = [];
 
   foreach ($_POST['p2precord'] as $id) {
     // construct full XML URI
     $detail_uri = $p2pserver . "/index.php?p=show_detail&inXML=true&id=" . $id;
     // parse XML
     $data = modsXMLsenayan($detail_uri, 'uri');
+
+    if (is_string($data)) {
+      $error_message[] = $data;
+      $error++;
+      continue;
+    }
+
     // get record detail
     $record = $data['records'][0];
     // insert record to database
@@ -173,6 +175,7 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
         unset($biblio['subjects']);
       }
 
+      $biblio['source'] = array_search('P2P Server', $sysconf['p2pserver_type']) . '.' . $_SESSION['p2pid'];
       $biblio['input_date'] = date('Y-m-d H:i:s');
       $biblio['last_update'] = date('Y-m-d H:i:s');
 
@@ -191,16 +194,8 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
 
       // download image 
 
-      if (isset($biblio['image']) && remoteFileExists($p2pserver . 'images/docs/' . $biblio['image'])) {
-        $url_image  = $p2pserver . 'images/docs/' . $biblio['image']; 
-        $image_path = IMGBS . 'docs' . DS . $biblio['image'];
-        $arrContextOptions = array(
-          "ssl" => array(
-            "verify_peer" => false,
-            "verify_peer_name" => false,
-          ),
-        );
-        file_put_contents($image_path, file_get_contents($url_image, false, stream_context_create($arrContextOptions)));
+      if (isset($biblio['image']) && remoteFileExists($url_image = $p2pserver . 'lib/minigalnano/createthumb.php?filename=images/docs/' . $biblio['image'])) {
+        downloadFile($url_image, Storage::images(), 'docs' . DS . $biblio['image']);
       }else{
         $biblio['image'] = NULL; 
       }
@@ -213,9 +208,6 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
       $sql_op->insert('biblio', $biblio);
       echo '<p>' . $sql_op->error . '</p><p>&nbsp;</p>';
       $biblio_id = $sql_op->insert_id;
-      if ($biblio_id < 1) {
-        continue;
-      }
       // insert authors
       if ($authors) {
         $author_id = 0;
@@ -248,8 +240,8 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
             $file_name = str_replace('/', '', $digital['path']);
             $url_file = $p2pserver . '/index.php?p=fstream-pdf&fid=' . $digital['id'] . '&bid=' . $id . '&fname=' . $file_name;
             $stream_file = $p2pserver . '/index.php?p=fstream&fid=' . $digital['id'] . '&bid=' . $id . '&fname=' . $file_name;
-            $target_path = REPOBS . str_replace('/', DS, $digital['path']);
-            if ($result = downloadFile($url_file, $target_path) !== true) {
+            $target_path = str_replace('/', DS, $digital['path']);
+            if ($result = downloadFile($url_file, Storage::repository(), $target_path) !== true) {
               echo '<p>' . $result . '</p>';
             } else {
               // save to files
@@ -271,8 +263,8 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
               $ba['access_limit'] = 'literal{NULL}';
               $sql_op->insert('biblio_attachment', $ba);
 
-        	  // write to logs
-        	  utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography',sprintf(__('%s download file ( %s ) from  ( %s )'),$_SESSION['realname'],$fdata['file_title'],$stream_file), 'Download');  
+        	    // write to logs
+        	    writeLog('staff', $_SESSION['uid'], 'bibliography',sprintf(__('%s download file ( %s ) from  ( %s )'),$_SESSION['realname'],$fdata['file_title'],$stream_file), 'Download');  
 
             }
           }
@@ -285,11 +277,15 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
         // update index
         $indexer->makeIndex($biblio_id);
         // write to logs
-        utility::writeLogs($dbs, 'staff', $_SESSION['uid'], 'bibliography',sprintf(__('%s insert bibliographic data from P2P service (server : %s) with title (%s) and biblio_id (%s)'),$_SESSION['realname'],$p2pserver,$biblio['title'],$biblio_id), 'P2P', 'Add');  
+        writeLog('staff', $_SESSION['uid'], 'bibliography',sprintf(__('%s insert bibliographic data from P2P service (server : %s) with title (%s) and biblio_id (%s)'),$_SESSION['realname'],$p2pserver,$biblio['title'],$biblio_id), 'P2P', 'Add');  
         $r++;
       }
       unset($biblio);
     }
+  }
+
+  if ($error) {
+    toastr(sprintf(__('Failed to download data from %s because : %s'), [$p2pserver, implode("\n", $error_message)]) . ' ' . $p2pserver);
   }
   exit();
 }
@@ -306,13 +302,22 @@ if (isset($_POST['saveResults']) && isset($_POST['p2precord'])) {
                 <form name="search" action="<?php echo MWB; ?>bibliography/p2p.php" id="search" method="get"
                       class="form-inline">
                     <span class="mr-2"><?php echo __('Search'); ?></span>
-                    <input type="text" name="keywords" id="keywords" class="form-control col-md-3"/>
+                    <input type="text" name="keywords" value="<?= xssFree($_GET['keywords']??'') ?>" id="keywords" class="form-control col-md-3"/>
                     <span class="mx-2"><?php echo __('Fields'); ?> :</span>
                     <select name="fields" style="width: 20%;" class="form-control">
-                        <option value=""><?php echo __('ALL'); ?></option>
-                        <option value="title"><?php echo __('Title'); ?></option>
-                        <option value="isbn"><?php echo __('ISBN'); ?></option>
-                        <option value="author"><?php echo __('Author'); ?></option>
+                        <?php
+                        $fields = [
+                          __('All') => '',
+                          __('Title') => 'title',
+                          __('ISBN') => 'isbn',
+                          __('Author') => 'author'
+                        ];
+
+                        foreach ($fields as $label => $value) {
+                          $currentField = xssFree($_GET['fields']??'');
+                          echo '<option value="' . $value . '" ' . ($currentField === $value ? 'selected' : '') . '>' . $label . '</option>';
+                        }
+                        ?>
                     </select>
                     <span class="mx-2"><?php echo __('Server'); ?>:</span>
                     <select name="p2pserver" style="width: 20%;"
@@ -336,6 +341,7 @@ if (isset($_GET['keywords']) && $can_read && isset($_GET['p2pserver'])) {
   $p2pserver = cleanUrl($sysconf['p2pserver'][$serverid]['uri']);
   $p2pserver_name = $sysconf['p2pserver'][$serverid]['name'];
 
+  $_SESSION['p2pid'] = $sysconf['p2pserver'][$serverid]['id']??0;
   $_SESSION['p2pserver'] = $p2pserver;
   # get keywords
   $keywords = urlencode($_GET['keywords']);
@@ -345,15 +351,16 @@ if (isset($_GET['keywords']) && $can_read && isset($_GET['p2pserver'])) {
 
   if($_GET['fields']!=''){
     $keywords = $_GET['fields'].'='.$keywords;
-    $data = modsXMLsenayan($p2pserver . "/index.php?resultXML=true&".$keywords."&search=Search&page=".$page, 'uri');
+    $url = $p2pserver . "index.php?resultXML=true&".$keywords."&search=Search&page=".$page;
+    $data = modsXMLsenayan($url, 'uri');
   }
   else{
-    $data = modsXMLsenayan($p2pserver . "/index.php?resultXML=true&search=Search&page=".$page."&keywords=" . $keywords, 'uri');
+    $url = $p2pserver . "index.php?resultXML=true&search=Search&page=".$page."&keywords=" . $keywords;
+    $data = modsXMLsenayan($url, 'uri');
   }
 
   # debugging tools
-  # echo $p2pserver."/index.php?resultXML=true&keywords=".$keywords;
-  # echo '<br />';
+  debug('P2P Debug', [$url, $data]);
 
   if (isset($data['records'])) {
 
@@ -413,15 +420,15 @@ if (isset($_GET['keywords']) && $can_read && isset($_GET['p2pserver'])) {
         }
       }
 
-      $image_path = isset($record['image'])?$p2pserver . 'images/docs/' . $record['image']:'../images/default/image.png';
+      $image_path = isset($record['image'])?$p2pserver . 'lib/minigalnano/createthumb.php?filename=images/docs/' . $record['image']:'../images/default/image.png';
 
       $image_uri = remoteFileExists($image_path)??'../images/default/image.png';
 
       $server = urlencode($p2pserver);
 
-      $detail = '<a class="s-btn btn btn-default btn-sm notAJAX openPopUp" href="modules/bibliography/pop_p2p.php?uri='.$server.'&biblioID='.$record['id'].'" title="detail">'.__('Detail').'</a>';
+      $detail = '<a class="s-btn btn btn-default btn-sm notAJAX openPopUp" href="modules/bibliography/pop_p2p.php?uri='.$serverid.'&biblioID='.$record['id'].'" title="detail">'.__('Detail').'</a>';
       $title_content = '<div class="media">
-                    <img class="mr-3 rounded" src="'.$image_uri.'" alt="'.$image_uri.'" style="height:70px;">
+                    <img class="mr-3 rounded" src="'.$image_uri.'" alt="'.$image_uri.'" loading="lazy" style="height:70px;">
                     <div class="media-body">
                       <div class="title">'.stripslashes($record['title']).'</div><div class="authors">'.$authors.'</div>
                     </div>
@@ -484,7 +491,10 @@ if (isset($_GET['keywords']) && $can_read && isset($_GET['p2pserver'])) {
     <?php
      exit();
   } else {
-    echo '<div class="errorBox">' . sprintf(__('Sorry, no result found from %s OR maybe XML result and detail disabled.'), $p2pserver) . '</div>';
+    echo '<div class="errorBox">' . 
+    sprintf(__('Sorry, no result found from %s OR maybe XML result and detail disabled.'), $p2pserver) . ',<button type="button" onclick="$(\'#detailError\').show()" class="' . (!isDev() ? 'notAJAX btn btn-link text-white' : 'd-none') . ' ">' . __('read error detail') . '.</button>' .
+    '<div id="detailError" class="mt-2" style="display: none;background-color: #18171B; padding: 15px; color: #56DB3A; font: 12px Menlo, Monaco, Consolas, monospace">' . (json_encode($data??[])) . '</div>' .
+    '</div>';
     exit();
   }
 }
